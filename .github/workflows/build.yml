@@ -57,15 +57,34 @@ jobs:
           STRIPE_LIFETIME_URL=${STRIPE_LIFETIME_URL}
           EOF
 
+      # Build only here — release uploads are handled in the next step so installers
+      # reliably appear under the GitHub Release (upload-artifact is Actions-only, not Releases).
       - name: Build with Tauri
         uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
-          releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
-          releaseDraft: true
-          prerelease: false
+          includeRelease: true
+
+      - name: Attach NSIS installer to GitHub Release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          installers=(src-tauri/target/release/bundle/nsis/*-setup.exe)
+          if [ "${#installers[@]}" -eq 0 ]; then
+            echo "::error::No NSIS *-setup.exe under src-tauri/target/release/bundle/nsis/"
+            find src-tauri/target/release/bundle -type f 2>/dev/null || true
+            exit 1
+          fi
+          if ! gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            gh release create "${{ github.ref_name }}" \
+              --draft \
+              --title "${{ github.ref_name }}" \
+              --notes "Tapt ${{ github.ref_name }}"
+          fi
+          gh release upload "${{ github.ref_name }}" "${installers[@]}" --clobber
 
       - name: Verify no plaintext secret leakage
         shell: bash
