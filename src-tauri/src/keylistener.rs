@@ -119,8 +119,8 @@ pub fn key_metadata(key: Key) -> (&'static str, &'static str, bool) {
         F11 => ("F11", "F11", false),
         F12 => ("F12", "F12", false),
 
-        // Modifiers — short ASCII so labels render in egui + WebView on Windows
-        // without relying on Unicode symbol coverage (⇧ ⌃ ⊞ often become tofu).
+        // Modifiers — short ASCII payloads; [`overlay_window`] maps codes to glyphs when
+        // `use_symbols` is on (still uses ASCII when off for reliable fonts everywhere).
         ShiftLeft => ("ShiftLeft", "Shift", true),
         ShiftRight => ("ShiftRight", "Shift", true),
         ControlLeft => ("ControlLeft", "Ctrl", true),

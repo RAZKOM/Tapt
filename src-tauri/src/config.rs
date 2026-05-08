@@ -18,16 +18,16 @@ pub enum Theme {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum DisplayMode {
-    #[default]
     KeyFeed,
+    #[default]
     KeyboardOverlay,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum FeedDirection {
-    #[default]
     Vertical,
+    #[default]
     Horizontal,
 }
 

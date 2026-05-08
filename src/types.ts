@@ -150,8 +150,8 @@ export const DEFAULT_CONFIG: Config = {
     backdrop_blur: true,
   },
   display: {
-    mode: "key-feed",
-    feed_direction: "vertical",
+    mode: "keyboard-overlay",
+    feed_direction: "horizontal",
     feed_row_direction: "right-to-left",
     feed_deduplicate_keys: false,
     feed_filter: "all",

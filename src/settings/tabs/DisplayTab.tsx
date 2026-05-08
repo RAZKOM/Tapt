@@ -5,6 +5,7 @@ import ColorPicker from "../components/ColorPicker";
 import Section from "../components/Section";
 import Select from "../components/Select";
 import Slider from "../components/Slider";
+import TabResetBar from "../components/TabResetBar";
 import Toggle from "../components/Toggle";
 
 export default function DisplayTab() {
@@ -14,6 +15,9 @@ export default function DisplayTab() {
   const setAppearance = useConfigStore((s) => s.setAppearance);
   const setBehavior = useConfigStore((s) => s.setBehavior);
   const setDisplay = useConfigStore((s) => s.setDisplay);
+  const resetAppearanceDefaults = useConfigStore(
+    (s) => s.resetAppearanceDefaults,
+  );
 
   const isPills = display.mode === "key-feed";
   const isKeyboard = display.mode === "keyboard-overlay";
@@ -44,29 +48,18 @@ export default function DisplayTab() {
 
   return (
     <div>
-      <h2 className="kv-section-title">Appearance</h2>
+      <TabResetBar
+        title="Appearance"
+        onReset={() => {
+          resetAppearanceDefaults();
+          void persistConfig();
+        }}
+      />
       <p style={{ color: "var(--kv-settings-muted)" }}>
-        Display mode, theme, overlay colours, and key feed options. Theme
-        applies to this window and the on-screen overlay; accents control
-        highlights in both.
+        Use the sidebar for overlay mode (pills vs keyboard) and bright vs dark
+        theme — it follows your system until you tap Light or Dark. Accents
+        below tweak highlight colours for both.
       </p>
-
-      <Section
-        title="Theme"
-        description='Light, dark, or match the system. Applies to this settings window and the key feed / keyboard overlay. "Custom" follows the system for the overlay.'
-      >
-        <Select
-          label="Theme"
-          value={appearance.theme}
-          onChange={(v) => patchAppearance("theme", v)}
-          options={[
-            { value: "system", label: "System" },
-            { value: "light", label: "Light" },
-            { value: "dark", label: "Dark" },
-            { value: "custom", label: "Custom" },
-          ]}
-        />
-      </Section>
 
       <Section
         title="Overlay colours"
@@ -81,18 +74,6 @@ export default function DisplayTab() {
           label="Modifier accent"
           value={appearance.modifier_accent}
           onChange={(v) => patchAppearance("modifier_accent", v)}
-        />
-      </Section>
-
-      <Section title="Overlay mode">
-        <Select
-          label="Display mode"
-          value={display.mode}
-          onChange={(v) => patchDisplay("mode", v)}
-          options={[
-            { value: "key-feed", label: "Key Feed (animated pills)" },
-            { value: "keyboard-overlay", label: "Keyboard overlay" },
-          ]}
         />
       </Section>
 
@@ -197,7 +178,7 @@ export default function DisplayTab() {
             />
             <Toggle
               label="Use key symbols"
-              description="When off, legacy Unicode key symbols (⇧, ⌃, …) are replaced with words. Modifiers and navigation use short text by default for crisp rendering."
+              description="Key feed & keyboard overlay: on = modifier / nav glyphs (⇧, ⌃, …); off = short words (Shift, Ctrl, …). Fonts fall back automatically if a glyph cannot be drawn."
               checked={appearance.use_symbols}
               onChange={(v) => patchAppearance("use_symbols", v)}
             />

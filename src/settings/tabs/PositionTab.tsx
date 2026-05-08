@@ -5,9 +5,19 @@ import { persistConfig } from "../../hooks/useConfig";
 import { useConfigStore } from "../../store/configStore";
 import type { DisplayConfig, MonitorInfo, OverlayMonitorRect } from "../../types";
 import { KEYBOARD_ANCHORS } from "../keyboardAnchors";
+import {
+  canNudge,
+  clampInt,
+  deltaFeedOffsetX,
+  deltaFeedOffsetY,
+  deltaKeyboardOffsetX,
+  deltaKeyboardOffsetY,
+} from "../offsetNudge";
+import NudgeCrossRow from "../components/NudgeCrossRow";
 import Section from "../components/Section";
 import Select from "../components/Select";
 import Slider from "../components/Slider";
+import TabResetBar from "../components/TabResetBar";
 import Toggle from "../components/Toggle";
 
 const PRIMARY_VALUE = "__primary__";
@@ -40,6 +50,7 @@ export default function PositionTab() {
   const position = useConfigStore((s) => s.config.position);
   const setDisplay = useConfigStore((s) => s.setDisplay);
   const setPosition = useConfigStore((s) => s.setPosition);
+  const resetPositionDefaults = useConfigStore((s) => s.resetPositionDefaults);
   const [monitors, setMonitors] = useState<MonitorInfo[] | null>(null);
   const [monitorLoadError, setMonitorLoadError] = useState<string | null>(null);
 
@@ -152,17 +163,30 @@ export default function PositionTab() {
     const pad = 6;
     const boxW = 280;
     const boxH = 140;
-    const scale = Math.min((boxW - pad * 2) / vw, (boxH - pad * 2) / vh);
-    return { list, minL, minT, scale, pad, boxW, boxH };
+    const innerW = boxW - pad * 2;
+    const innerH = boxH - pad * 2;
+    const scale = Math.min(innerW / vw, innerH / vh);
+    const contentW = vw * scale;
+    const contentH = vh * scale;
+    // Center silhouette when virtual-desktop aspect ≠ preview box (avoids uneven empty margins).
+    const originX = pad + Math.max(0, (innerW - contentW) / 2);
+    const originY = pad + Math.max(0, (innerH - contentH) / 2);
+    return { list, minL, minT, scale, originX, originY, boxW, boxH };
   }, [monitors]);
 
   return (
     <div>
-      <h2 className="kv-section-title">Position</h2>
+      <TabResetBar
+        title="Position"
+        onReset={() => {
+          resetPositionDefaults();
+          void persistConfig();
+        }}
+      />
 
       <Section
         title="Overlay display"
-        description="Choose which monitor shows the fullscreen transparent overlay. This matches Windows virtual-screen layout (negative coordinates are normal for monitors above or to the left of the primary)."
+        description="Monitors come from Windows in virtual-desktop coordinates (same spatial layout as in Display Settings). The preview scales that layout to fit the box below and centers it — relative positions match your desk; margin inside the preview is symmetric."
       >
         {monitorLoadError != null ? (
           <p style={{ color: "var(--kv-settings-danger, #f87171)", margin: 0 }}>
@@ -208,10 +232,10 @@ export default function PositionTab() {
                       style={{
                         position: "absolute",
                         left:
-                          schematic.pad +
+                          schematic.originX +
                           (m.left - schematic.minL) * schematic.scale,
                         top:
-                          schematic.pad +
+                          schematic.originY +
                           (m.top - schematic.minT) * schematic.scale,
                         width: m.width * schematic.scale,
                         height: m.height * schematic.scale,
@@ -272,58 +296,177 @@ export default function PositionTab() {
           </Section>
 
           <Section title="Offset (key feed)">
-            <Slider
-              label="Offset X"
-              min={0}
-              max={400}
-              value={position.offset_x}
-              onChange={(v) => updatePosition("offset_x", v)}
-              formatter={(n) => `${n}px`}
-            />
-            <Slider
-              label="Offset Y"
-              min={0}
-              max={400}
-              value={position.offset_y}
-              onChange={(v) => updatePosition("offset_y", v)}
-              formatter={(n) => `${n}px`}
-            />
+            <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 12 }}>
+                <Slider
+                  label="Offset X"
+                  min={0}
+                  max={400}
+                  value={position.offset_x}
+                  onChange={(v) => updatePosition("offset_x", v)}
+                  formatter={(n) => `${n}px`}
+                />
+                <Slider
+                  label="Offset Y"
+                  min={0}
+                  max={400}
+                  value={position.offset_y}
+                  onChange={(v) => updatePosition("offset_y", v)}
+                  formatter={(n) => `${n}px`}
+                />
+              </div>
+              <div
+                style={{
+                  flexShrink: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "center",
+                  height: "100%",
+                }}
+              >
+                <NudgeCrossRow
+                  horizontalDisabled={[
+                    !canNudge(
+                      position.offset_x,
+                      deltaFeedOffsetX("left", position.snap),
+                      0,
+                      400,
+                    ),
+                    !canNudge(
+                      position.offset_x,
+                      deltaFeedOffsetX("right", position.snap),
+                      0,
+                      400,
+                    ),
+                  ]}
+                  verticalDisabled={[
+                    !canNudge(
+                      position.offset_y,
+                      deltaFeedOffsetY("up", position.snap),
+                      0,
+                      400,
+                    ),
+                    !canNudge(
+                      position.offset_y,
+                      deltaFeedOffsetY("down", position.snap),
+                      0,
+                      400,
+                    ),
+                  ]}
+                  onHorizontal={(dir) => {
+                    const d = deltaFeedOffsetX(dir, position.snap);
+                    const n = clampInt(position.offset_x + d, 0, 400);
+                    if (n !== position.offset_x) updatePosition("offset_x", n);
+                  }}
+                  onVertical={(dir) => {
+                    const d = deltaFeedOffsetY(dir, position.snap);
+                    const n = clampInt(position.offset_y + d, 0, 400);
+                    if (n !== position.offset_y) updatePosition("offset_y", n);
+                  }}
+                />
+              </div>
+      
+            </div>
+    
           </Section>
         </>
       )}
 
       {isKeyboard && (
-        <Section
-          title="Keyboard position"
-          description={
-            display.keyboard_anchor === "free"
-              ? "Offsets are pixels from the top-left of the overlay (full screen)."
-              : "Anchor picks a corner or edge; offsets nudge the panel from that spot (positive bottom offsets lift the keyboard up)."
-          }
-        >
-          <Select
-            label="Anchor"
-            value={display.keyboard_anchor}
-            onChange={(v) => patchDisplay("keyboard_anchor", v)}
-            options={KEYBOARD_ANCHORS}
-          />
-          <Slider
-            label="Fine-tune horizontal (px)"
-            min={-400}
-            max={400}
-            value={display.keyboard_offset_x}
-            onChange={(v) => patchDisplay("keyboard_offset_x", v)}
-            formatter={(n) => `${n}px`}
-          />
-          <Slider
-            label="Fine-tune vertical (px)"
-            min={-400}
-            max={400}
-            value={display.keyboard_offset_y}
-            onChange={(v) => patchDisplay("keyboard_offset_y", v)}
-            formatter={(n) => `${n}px`}
-          />
-        </Section>
+        <>
+          <Section title="Snap (keyboard overlay)">
+            <Select
+              label="Anchor"
+              value={display.keyboard_anchor}
+              onChange={(v) => patchDisplay("keyboard_anchor", v)}
+              options={KEYBOARD_ANCHORS}
+            />
+          </Section>
+
+          <Section
+            title="Offset (keyboard overlay)"
+            description={
+              display.keyboard_anchor === "free"
+                ? "Offsets are pixels from the top-left of the overlay (full screen)."
+                : "Nudge from the anchored spot in pixels — positive vertical values lift the panel up from bottom-aligned edges."
+            }
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 12 }}>
+                <Slider
+                  label="Fine-tune horizontal (px)"
+                  min={-400}
+                  max={400}
+                  value={display.keyboard_offset_x}
+                  onChange={(v) => patchDisplay("keyboard_offset_x", v)}
+                  formatter={(n) => `${n}px`}
+                />
+                <Slider
+                  label="Fine-tune vertical (px)"
+                  min={-400}
+                  max={400}
+                  value={display.keyboard_offset_y}
+                  onChange={(v) => patchDisplay("keyboard_offset_y", v)}
+                  formatter={(n) => `${n}px`}
+                />
+              </div>
+              <div
+                style={{
+                  flexShrink: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "center",
+                  height: "100%",
+                }}
+              >
+                <NudgeCrossRow
+                  horizontalDisabled={[
+                    !canNudge(
+                      display.keyboard_offset_x,
+                      deltaKeyboardOffsetX("left", display.keyboard_anchor),
+                      -400,
+                      400,
+                    ),
+                    !canNudge(
+                      display.keyboard_offset_x,
+                      deltaKeyboardOffsetX("right", display.keyboard_anchor),
+                      -400,
+                      400,
+                    ),
+                  ]}
+                  verticalDisabled={[
+                    !canNudge(
+                      display.keyboard_offset_y,
+                      deltaKeyboardOffsetY("up", display.keyboard_anchor),
+                      -400,
+                      400,
+                    ),
+                    !canNudge(
+                      display.keyboard_offset_y,
+                      deltaKeyboardOffsetY("down", display.keyboard_anchor),
+                      -400,
+                      400,
+                    ),
+                  ]}
+                  onHorizontal={(dir) => {
+                    const d = deltaKeyboardOffsetX(dir, display.keyboard_anchor);
+                    const n = clampInt(display.keyboard_offset_x + d, -400, 400);
+                    if (n !== display.keyboard_offset_x) {
+                      patchDisplay("keyboard_offset_x", n);
+                    }
+                  }}
+                  onVertical={(dir) => {
+                    const d = deltaKeyboardOffsetY(dir, display.keyboard_anchor);
+                    const n = clampInt(display.keyboard_offset_y + d, -400, 400);
+                    if (n !== display.keyboard_offset_y) {
+                      patchDisplay("keyboard_offset_y", n);
+                    }
+                  }}
+                />
+              </div>
+            </div>
+          </Section>
+        </>
       )}
 
       <Section title="Persistence">

@@ -5,7 +5,9 @@ import { useAuthGuard } from "../hooks/useAuthGuard";
 import { useConfig } from "../hooks/useConfig";
 import { useThemeTokens } from "../hooks/useThemeTokens";
 import { useAuthStore } from "../store/authStore";
+import OverlayModeSwitcher from "./components/OverlayModeSwitcher";
 import SettingsTitleBar from "./components/SettingsTitleBar";
+import ThemeModeSwitcher from "./components/ThemeModeSwitcher";
 import BehaviorTab from "./tabs/BehaviorTab";
 import DisplayTab from "./tabs/DisplayTab";
 import LicenseTab from "./tabs/LicenseTab";
@@ -56,26 +58,40 @@ export default function SettingsApp() {
       <SettingsTitleBar />
       <div className="kv-settings__body">
         <nav className="kv-tabs" aria-label="Settings tabs">
-          {TABS.map((t) => {
-            const locked = !authenticated && t.id !== "license";
-            return (
-              <button
-                key={t.id}
-                type="button"
-                className="kv-tab"
-                aria-selected={active === t.id}
-                disabled={locked}
-                title={
-                  locked
-                    ? "Activate a license to change behaviour, appearance, and position."
-                    : undefined
-                }
-                onClick={() => setActive(t.id)}
-              >
-                {t.label}
-              </button>
-            );
-          })}
+          <div className="kv-tabs__scroll">
+            {TABS.map((t) => {
+              const locked = !authenticated && t.id !== "license";
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  className="kv-tab"
+                  aria-selected={active === t.id}
+                  disabled={locked}
+                  title={
+                    locked
+                      ? "Activate a license to change behaviour, appearance, and position."
+                      : undefined
+                  }
+                  onClick={() => setActive(t.id)}
+                >
+                  {t.label}
+                </button>
+              );
+            })}
+          </div>
+          {authenticated && (
+            <div className="kv-tabs__quick" aria-label="Quick settings">
+              <div className="kv-tabs__quick-group">
+                <div className="kv-tabs__quick-label">Overlay mode</div>
+                <OverlayModeSwitcher className="kv-overlay-mode--nav" />
+              </div>
+              <div className="kv-tabs__quick-group">
+                <div className="kv-tabs__quick-label">Theme</div>
+                <ThemeModeSwitcher />
+              </div>
+            </div>
+          )}
         </nav>
         <main
           className={

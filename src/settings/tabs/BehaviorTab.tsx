@@ -7,11 +7,13 @@ import {
   hotkeyDisplaySegments,
 } from "../hotkeyCapture";
 import Section from "../components/Section";
+import TabResetBar from "../components/TabResetBar";
 import Toggle from "../components/Toggle";
 
 export default function BehaviorTab() {
   const behavior = useConfigStore((s) => s.config.behavior);
   const setBehavior = useConfigStore((s) => s.setBehavior);
+  const resetBehaviorDefaults = useConfigStore((s) => s.resetBehaviorDefaults);
 
   function update<K extends keyof typeof behavior>(
     key: K,
@@ -23,7 +25,17 @@ export default function BehaviorTab() {
 
   return (
     <div>
-      <h2 className="kv-section-title">Behaviour</h2>
+      <TabResetBar
+        title="Behaviour"
+        onReset={() => {
+          resetBehaviorDefaults();
+          void persistConfig().then(() =>
+            applyAutostart(
+              useConfigStore.getState().config.behavior.launch_at_login,
+            ),
+          );
+        }}
+      />
       <p style={{ color: "var(--kv-settings-muted)" }}>
         Startup, autostart, and a system-wide shortcut to show or hide the
         overlay.

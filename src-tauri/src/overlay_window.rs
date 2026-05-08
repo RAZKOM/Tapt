@@ -114,24 +114,25 @@ pub fn run_overlay(
     .map_err(|e| format!("eframe::run_native failed: {e:?}"))
 }
 
-/// Noto Sans is bundled for broad Unicode (typed characters, punctuation, i18n);
-/// modifier caps use short ASCII so labels never depend on symbol-font coverage.
+/// **Noto Sans Symbols 2** is tried before **Noto Sans** so modifier / nav glyphs
+/// (⇧, ⌃, ⌥, …) resolve: `NotoSans-Regular` often lacks those codepoints while still
+/// “claiming” a glyph (tofu), which blocks fallback. Latin text still comes from Noto Sans
+/// when Symbols 2 omits basic letters. SIL OFL for both bundles.
 fn install_overlay_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
+    fonts.font_data.insert(
+        "noto_symbols2".into(),
+        FontData::from_static(include_bytes!("../assets/fonts/NotoSansSymbols2-Regular.ttf")),
+    );
     fonts.font_data.insert(
         "noto_sans".into(),
         FontData::from_static(include_bytes!("../assets/fonts/NotoSans-Regular.ttf")),
     );
-    fonts
-        .families
-        .entry(FontFamily::Proportional)
-        .or_default()
-        .insert(0, "noto_sans".into());
-    fonts
-        .families
-        .entry(FontFamily::Monospace)
-        .or_default()
-        .insert(0, "noto_sans".into());
+    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+        let entry = fonts.families.entry(family).or_default();
+        entry.insert(0, "noto_symbols2".into());
+        entry.insert(1, "noto_sans".into());
+    }
     ctx.set_fonts(fonts);
 }
 
@@ -197,7 +198,10 @@ impl OverlayApp {
         self.pressed.insert(ke.code.clone());
         let now = Instant::now();
         let id = self.next_id();
-        let dedupe_keys = self.state.config.read().display.feed_deduplicate_keys;
+        let cfg = self.state.config.read();
+        let dedupe_keys = cfg.display.feed_deduplicate_keys;
+        let use_symbols = cfg.appearance.use_symbols;
+        drop(cfg);
 
         if ke.is_modifier {
             if dedupe_keys {
@@ -207,7 +211,7 @@ impl OverlayApp {
             self.feed.push_back(FeedEntry {
                 id,
                 timestamp: now,
-                label: ke.label,
+                label: modifier_display(&ke.code, use_symbols).into(),
                 is_modifier: true,
                 is_combo: false,
                 dedupe_key: Some(ke.code.clone()),
@@ -248,7 +252,7 @@ impl OverlayApp {
                 let mut parts: Vec<String> = self
                     .held_modifiers
                     .keys()
-                    .map(|c| modifier_glyph(c).to_string())
+                    .map(|c| modifier_display(c, use_symbols).to_string())
                     .collect();
                 parts.sort();
                 parts.dedup();
@@ -270,7 +274,7 @@ impl OverlayApp {
             self.feed.push_back(FeedEntry {
                 id,
                 timestamp: now,
-                label: ke.label,
+                label: display_label(&ke.label, use_symbols),
                 is_modifier: false,
                 is_combo: false,
                 dedupe_key: Some(ke.code.clone()),
@@ -1016,32 +1020,58 @@ fn passes_filter(entry: &FeedEntry, filter: FeedFilter) -> bool {
     }
 }
 
-/// Human-readable labels: strip legacy Unicode key symbols when the user
-/// turns off `use_symbols`, and normalize older recordings that still used
-/// glyphs like ⇧ (some fonts render those as tofu in egui / WebView2).
+/// Labels for the overlay: with `use_symbols`, map short ASCII names from
+/// [`crate::keylistener::key_metadata`] (and the keyboard layout) to the same
+/// Unicode symbols we strip when symbols are off. Combo strings built from
+/// [`modifier_display`] pass through untouched.
+///
+/// Symbols must stay in sync with [`display_label`]'s `use_symbols == false` branch.
 fn display_label(label: &str, use_symbols: bool) -> String {
     if use_symbols {
-        return label.to_string();
+        return match label {
+            // Glyph codepoints mirror **Noto Sans Symbols 2** `cmap` (avoid tofu).
+            "Esc" => "\u{241b}".into(),
+            "Tab" => "\u{2b7e}".into(),
+            "Enter" => "\u{23ce}".into(),
+            "Bksp" => "\u{232b}".into(),
+            "Up" => "\u{2b06}".into(),
+            "Down" => "\u{2b07}".into(),
+            "Left" => "\u{2b05}".into(),
+            "Right" => "\u{2b95}".into(),
+            _ => label.to_string(),
+        };
     }
     label
         .replace('⇧', "Shift")
         .replace('⌃', "Ctrl")
+        .replace('\u{2324}', "Ctrl") // ⌤ substituted for ⌃ — see [`modifier_display`]
         .replace('⌥', "Alt")
         .replace('⌘', "Cmd")
         .replace('⊞', "Win")
         .replace('⇪', "Caps")
+        .replace('\u{241b}', "Esc") // ␛ SYMBOL FOR ESCAPE
+        .replace('\u{2b7e}', "Tab") // ⭾ HORIZONTAL TAB KEY
+        .replace('\u{2409}', "Tab") // ␉ legacy control-picture tab
+        .replace('\u{21a9}', "Enter")
+        .replace('\u{23ce}', "Enter") // ⏎ RETURN SYMBOL
         .replace('↩', "Enter")
         .replace('⌫', "Bksp")
         .replace('⇥', "Tab")
+        .replace('\u{21e5}', "Tab")
         .replace('⎋', "Esc")
+        .replace('\u{238b}', "Esc")
         .replace('↑', "Up")
         .replace('↓', "Down")
         .replace('←', "Left")
         .replace('→', "Right")
+        .replace('\u{2b06}', "Up") // Symbols2-heavy arrows used in glyph mode
+        .replace('\u{2b07}', "Down")
+        .replace('\u{2b05}', "Left")
+        .replace('\u{2b95}', "Right")
 }
 
-/// Stable label for a modifier key code; used by the combo collapser so two
-/// Shift presses render once as "Shift". Uses ASCII for reliable fonts.
+/// Stable short text for modifiers when `use_symbols` is false; Unicode glyphs
+/// when true (paired with [`display_label`]'s stripping pass).
 fn modifier_glyph(code: &str) -> &'static str {
     match code {
         "ShiftLeft" | "ShiftRight" => "Shift",
@@ -1049,6 +1079,24 @@ fn modifier_glyph(code: &str) -> &'static str {
         "AltLeft" | "AltRight" => "Alt",
         "MetaLeft" | "MetaRight" => "Win",
         "CapsLock" => "Caps",
+        "Fn" => "Fn",
+        _ => "?",
+    }
+}
+
+#[inline]
+fn modifier_display(code: &str, use_symbols: bool) -> &'static str {
+    if !use_symbols {
+        return modifier_glyph(code);
+    }
+    match code {
+        "ShiftLeft" | "ShiftRight" => "\u{21e7}",
+        // `U+2324` ⌤ — not Apple’s ⌃ (`U+2303`), but Symbols 2 outlines it; ⌃ renders as tofu.
+        "ControlLeft" | "ControlRight" => "\u{2324}",
+        "AltLeft" | "AltRight" => "\u{2325}",
+        // Match Unicode cleanup in [`display_label`] (`⊞`, U+229E).
+        "MetaLeft" | "MetaRight" => "\u{229e}",
+        "CapsLock" => "\u{21ea}",
         "Fn" => "Fn",
         _ => "?",
     }
