@@ -1,0 +1,95 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (windows-latest)
+    runs-on: windows-latest
+
+    env:
+      AUTHFORGE_APP_ID: ${{ secrets.AUTHFORGE_APP_ID }}
+      AUTHFORGE_APP_SECRET: ${{ secrets.AUTHFORGE_APP_SECRET }}
+      AUTHFORGE_PUBLIC_KEY: ${{ secrets.AUTHFORGE_PUBLIC_KEY }}
+      STRIPE_MONTHLY_URL: ${{ secrets.STRIPE_MONTHLY_URL }}
+      STRIPE_LIFETIME_URL: ${{ secrets.STRIPE_LIFETIME_URL }}
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Write .env from CI secrets
+        shell: bash
+        run: |
+          mkdir -p src-tauri
+          cat <<EOF > src-tauri/.env
+          AUTHFORGE_APP_ID=${AUTHFORGE_APP_ID}
+          AUTHFORGE_APP_SECRET=${AUTHFORGE_APP_SECRET}
+          AUTHFORGE_PUBLIC_KEY=${AUTHFORGE_PUBLIC_KEY}
+          STRIPE_MONTHLY_URL=${STRIPE_MONTHLY_URL}
+          STRIPE_LIFETIME_URL=${STRIPE_LIFETIME_URL}
+          EOF
+
+      - name: Build with Tauri
+        uses: tauri-apps/tauri-action@v0
+        with:
+          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+          releaseDraft: true
+          prerelease: false
+
+      - name: Verify no plaintext secret leakage
+        shell: bash
+        run: |
+          set -e
+          BIN=$(find src-tauri/target -name 'tapt.exe' -type f | head -n1)
+          if [ -z "$BIN" ]; then
+            echo "binary not found; skipping leakage check"
+            exit 0
+          fi
+          if [ -n "${AUTHFORGE_APP_ID}" ]; then
+            if grep -aF "${AUTHFORGE_APP_ID}" "$BIN" > /dev/null 2>&1; then
+              echo "::error::AUTHFORGE_APP_ID found as plaintext in $BIN"
+              exit 1
+            fi
+          fi
+          if [ -n "${AUTHFORGE_APP_SECRET}" ]; then
+            if grep -aF "${AUTHFORGE_APP_SECRET}" "$BIN" > /dev/null 2>&1; then
+              echo "::error::AUTHFORGE_APP_SECRET found as plaintext in $BIN"
+              exit 1
+            fi
+          fi
+          echo "binary clean of known plaintext secrets"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tapt-windows-latest
+          path: |
+            src-tauri/target/release/bundle/**/*
+            src-tauri/target/*/release/bundle/**/*
+          if-no-files-found: warn

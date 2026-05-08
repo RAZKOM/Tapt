@@ -1,0 +1,79 @@
+:root {
+  --kv-primary-accent: #5b8bff;
+  --kv-modifier-accent: #ff7e5b;
+  --kv-bg: rgba(20, 22, 32, 0.78);
+  --kv-fg: #ffffff;
+  --kv-fg-secondary: rgba(255, 255, 255, 0.65);
+  --kv-pill-bg: rgba(20, 22, 32, 0.78);
+  --kv-pill-border: rgba(255, 255, 255, 0.08);
+  --kv-pill-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --kv-pill-radius: 10px;
+  --kv-pill-opacity: 0.9;
+  --kv-font-size: 18px;
+  --kv-font-family: "Segoe UI Variable", "Segoe UI", "Inter", system-ui, sans-serif;
+  --kv-blur: 12px;
+
+  --kv-settings-bg: #f6f7fb;
+  --kv-settings-fg: #14161e;
+  --kv-settings-card: #ffffff;
+  --kv-settings-border: #e6e7ee;
+  --kv-settings-muted: #6b7280;
+  --kv-settings-danger: #d83333;
+  --kv-settings-success: #1f9d55;
+  --kv-settings-shadow: 0 1px 2px rgba(20, 22, 32, 0.04),
+    0 4px 12px rgba(20, 22, 32, 0.06);
+}
+
+/* Settings window only — `data-theme` is set on `.kv-settings`, not `html`. */
+.kv-settings[data-theme="dark"] {
+  --kv-settings-bg: #0d0f17;
+  --kv-settings-fg: #f1f3f8;
+  --kv-settings-card: #161924;
+  --kv-settings-border: #232636;
+  --kv-settings-muted: #9aa0b3;
+  --kv-settings-shadow: 0 1px 2px rgba(0, 0, 0, 0.4),
+    0 4px 12px rgba(0, 0, 0, 0.45);
+}
+
+@media (prefers-color-scheme: dark) {
+  .kv-settings[data-theme="system"] {
+    --kv-settings-bg: #0d0f17;
+    --kv-settings-fg: #f1f3f8;
+    --kv-settings-card: #161924;
+    --kv-settings-border: #232636;
+    --kv-settings-muted: #9aa0b3;
+    --kv-settings-shadow: 0 1px 2px rgba(0, 0, 0, 0.4),
+      0 4px 12px rgba(0, 0, 0, 0.45);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/*
+ * Safe global resets shared by the overlay AND settings windows.
+ * Do NOT add `background` or `color` rules to `html` / `body` here — the
+ * overlay window MUST stay transparent; per-window backgrounds belong on the
+ * top-level container (`.kv-overlay-root`, `.kv-settings`).
+ */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+  color: inherit;
+}

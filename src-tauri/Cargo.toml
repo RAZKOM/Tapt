@@ -1,0 +1,74 @@
+[package]
+name = "tapt"
+version = "0.1.0"
+description = "Tapt. — transparent keyboard overlay for streams and demos"
+authors = ["Tapt"]
+license = "Proprietary"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "tapt_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "tapt"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-store = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-shell = "2"
+
+authforge = "1.0.6"
+
+# Compile-time string encryption for AuthForge secrets and Stripe URLs.
+# The spec referenced 0.3 but only 3.x is published; we use 3.
+cryptify = "3"
+
+rdev = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+time = { version = "0.3", features = ["parsing"] }
+tokio = { version = "1", features = ["full"] }
+once_cell = "1"
+log = "0.4"
+sha2 = "0.10"
+# Native overlay uses eframe+WGPU (not Glow): OpenGL configs on Windows sometimes lack
+# framebuffer alpha → fully invisible transparent windows; WGPU composites reliably.
+# WGPU is used instead of Glow on Windows: Glow+Glutin's first GL config often lacks
+# framebuffer alpha on some drivers (EGL-first), which composits as fully invisible.
+eframe = { version = "0.29.1", default-features = false, features = ["default_fonts", "wgpu"] }
+egui = "0.29.1"
+crossbeam-channel = "0.5.15"
+parking_lot = "0.12.5"
+# Direct winit dep so we can call `EventLoopBuilderExtWindows::with_any_thread`
+# on the builder eframe hands us. Must match eframe 0.29's transitive winit
+# version exactly so the EventLoopBuilder type lines up.
+winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] }
+raw-window-handle = "0.6.2"
+tauri-plugin-global-shortcut = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_HiDpi",
+] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+strip = true
+panic = "abort"
+lto = true
+opt-level = 3
+codegen-units = 1

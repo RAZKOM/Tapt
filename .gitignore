@@ -1,0 +1,76 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+dist-ssr/
+
+# Vite
+.vite/
+
+# TypeScript (project references / incremental)
+*.tsbuildinfo
+
+# TypeScript — artifacts sometimes emitted next to vite.config.*
+vite.config.d.ts
+vite.config.js
+vite.config.js.map
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Tests / coverage
+coverage/
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/
+src-tauri/WixTools/
+
+# Environment & secrets (never commit real credentials)
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+src-tauri/.env
+src-tauri/.env.local
+src-tauri/.env.*.local
+
+# Code signing keys / certs
+*.p12
+*.pfx
+*.cer
+*.p8
+*.key
+*.pem
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+
+# Patch / merge residue
+*.orig
+*.rej
+
+# VS Code — keep shared recommendations; ignore user workspace noise
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Cursor (local state; uncomment if your team commits shared rules elsewhere)
+# .cursor/
+
+# Misc local Vite pattern (env-style files only; remove if you rely on `*.foo.local` source files)
+*.local

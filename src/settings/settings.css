@@ -1,0 +1,685 @@
+/*
+ * IMPORTANT: do NOT add `html, body { background: ... }` rules here.
+ * `src/main.tsx` is shared between the overlay and settings windows, so Vite
+ * bundles `settings.css` into BOTH window loads. Any global `body` rule will
+ * paint the transparent overlay window opaque. Scope all backgrounds /
+ * foreground colors to the `.kv-settings` root instead.
+ */
+
+html:has(.kv-settings),
+body:has(.kv-settings) {
+  height: 100%;
+  margin: 0;
+}
+
+body:has(.kv-settings) {
+  overflow: hidden;
+}
+
+#root:has(.kv-settings) {
+  height: 100%;
+}
+
+.kv-settings {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 100vh;
+  width: 100%;
+  background: var(--kv-settings-bg);
+  color: var(--kv-settings-fg);
+  font-family: var(--kv-font-family);
+  font-size: 14px;
+  overflow: hidden;
+
+  --kv-scroll-track: var(--kv-settings-bg);
+  --kv-scroll-thumb: color-mix(
+    in srgb,
+    var(--kv-settings-muted) 50%,
+    var(--kv-settings-border)
+  );
+  --kv-scroll-thumb-hover: color-mix(
+    in srgb,
+    var(--kv-primary-accent) 40%,
+    var(--kv-settings-border)
+  );
+}
+
+.kv-settings__body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 148px 1fr;
+  grid-template-rows: 1fr;
+}
+
+.kv-titlebar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: stretch;
+  height: 44px;
+  background: var(--kv-settings-card);
+  border-bottom: 1px solid var(--kv-settings-border);
+  user-select: none;
+}
+
+.kv-titlebar__drag {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding-left: 12px;
+}
+
+.kv-titlebar__brand {
+  display: flex;
+  align-items: center;
+}
+
+.kv-titlebar__brand .kv-brand-wordmark {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.kv-titlebar__brand .kv-brand-logo {
+  width: 22px;
+  height: 22px;
+}
+
+.kv-titlebar__controls {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.kv-titlebar__btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--kv-settings-fg);
+  cursor: pointer;
+}
+
+.kv-titlebar__btn:hover {
+  background: color-mix(in srgb, var(--kv-settings-fg) 8%, transparent);
+}
+
+.kv-titlebar__btn--close:hover {
+  background: #e81123;
+  color: #ffffff;
+}
+
+.kv-tabs {
+  background: var(--kv-settings-card);
+  border-right: 1px solid var(--kv-settings-border);
+  padding: 16px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--kv-scroll-thumb) var(--kv-scroll-track);
+}
+
+.kv-tabs::-webkit-scrollbar {
+  width: 10px;
+}
+
+.kv-tabs::-webkit-scrollbar-track {
+  background: var(--kv-scroll-track);
+  border-radius: 6px;
+}
+
+.kv-tabs::-webkit-scrollbar-thumb {
+  background: var(--kv-scroll-thumb);
+  border-radius: 6px;
+  border: 2px solid var(--kv-scroll-track);
+}
+
+.kv-tabs::-webkit-scrollbar-thumb:hover {
+  background: var(--kv-scroll-thumb-hover);
+}
+
+.kv-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--kv-settings-fg);
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+}
+
+.kv-tab:hover {
+  background: var(--kv-settings-bg);
+}
+
+.kv-tab[aria-selected="true"] {
+  background: color-mix(in srgb, var(--kv-primary-accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--kv-primary-accent) 40%, transparent);
+  color: var(--kv-primary-accent);
+}
+
+.kv-tab:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  color: var(--kv-settings-muted);
+}
+
+.kv-tab:disabled:hover {
+  background: transparent;
+}
+
+.kv-tab[aria-selected="true"]:disabled {
+  background: color-mix(in srgb, var(--kv-settings-muted) 10%, transparent);
+  border-color: color-mix(in srgb, var(--kv-settings-border) 80%, transparent);
+  color: var(--kv-settings-muted);
+}
+
+.kv-tab-body {
+  padding: 24px 28px;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--kv-scroll-thumb) var(--kv-scroll-track);
+}
+
+.kv-tab-body::-webkit-scrollbar {
+  width: 10px;
+}
+
+.kv-tab-body::-webkit-scrollbar-track {
+  background: var(--kv-scroll-track);
+  border-radius: 6px;
+}
+
+.kv-tab-body::-webkit-scrollbar-thumb {
+  background: var(--kv-scroll-thumb);
+  border-radius: 6px;
+  border: 2px solid var(--kv-scroll-track);
+}
+
+.kv-tab-body::-webkit-scrollbar-thumb:hover {
+  background: var(--kv-scroll-thumb-hover);
+}
+
+/* License tab: pin footnote to bottom when content is shorter than the pane */
+.kv-tab-body--license-footer {
+  display: flex;
+  flex-direction: column;
+}
+
+.kv-tab-body--license-footer > .kv-license-tab {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.kv-license-tab__main {
+  flex: 1 1 auto;
+}
+
+.kv-license-footnote-wrap {
+  flex-shrink: 0;
+  margin-top: auto;
+  padding-top: 1.25rem;
+  border-top: 1px solid color-mix(in srgb, var(--kv-settings-border) 55%, transparent);
+}
+
+.kv-brand-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.kv-brand-logo {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  flex-shrink: 0;
+  border-radius: 6px;
+}
+
+.kv-brand-wordmark {
+  display: inline-flex;
+  align-items: baseline;
+}
+
+.kv-brand-wordmark__name {
+  color: inherit;
+}
+
+/* Period matches Primary accent — set Appearance → Primary accent to your logo color. */
+.kv-brand-wordmark__dot {
+  color: var(--kv-primary-accent);
+}
+
+.kv-section-title {
+  font-size: 20px;
+  font-weight: 700;
+  margin: 0 0 8px;
+}
+
+.kv-hotkey-field {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-block: 10px;
+}
+
+.kv-hotkey-field__copy {
+  max-width: 100%;
+}
+
+.kv-hotkey-field__controls-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+}
+
+.kv-hotkey-field__preview {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.kv-hotkey-field__preview .kv-hotkey-keycaps {
+  margin-top: 0;
+  min-height: auto;
+  justify-content: flex-end;
+}
+
+.kv-hotkey-field__title {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.kv-hotkey-field__hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--kv-settings-muted);
+}
+
+.kv-hotkey-keycaps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+  min-height: 40px;
+}
+
+.kv-hotkey-keycaps--listen {
+  gap: 10px;
+}
+
+.kv-hotkey-keycaps--empty {
+  opacity: 0.9;
+}
+
+.kv-hotkey-listen-hint {
+  font-size: 12px;
+  color: var(--kv-settings-muted);
+}
+
+.kv-keycap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  padding: 7px 11px;
+  font-size: 13px;
+  font-weight: 650;
+  font-family: var(--kv-font-family);
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  color: var(--kv-settings-fg);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--kv-settings-card) 88%, var(--kv-settings-fg) 5%) 0%,
+    var(--kv-settings-card) 100%
+  );
+  border: 1px solid var(--kv-settings-border);
+  border-radius: 7px;
+  box-shadow:
+    0 1px 0 color-mix(in srgb, var(--kv-settings-fg) 12%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #fff 55%, transparent);
+}
+
+[data-theme="dark"] .kv-keycap {
+  box-shadow:
+    0 1px 0 color-mix(in srgb, #000 50%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--kv-settings-fg) 8%, transparent);
+}
+
+.kv-keycap--modifier {
+  background: color-mix(
+    in srgb,
+    var(--kv-primary-accent) 12%,
+    var(--kv-settings-card)
+  );
+  border-color: color-mix(
+    in srgb,
+    var(--kv-primary-accent) 35%,
+    var(--kv-settings-border)
+  );
+}
+
+.kv-keycap--placeholder {
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--kv-settings-muted);
+  background: var(--kv-settings-bg);
+  border-style: dashed;
+  box-shadow: none;
+}
+
+.kv-keycap--listening {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--kv-primary-accent);
+  border-color: color-mix(
+    in srgb,
+    var(--kv-primary-accent) 45%,
+    var(--kv-settings-border)
+  );
+  animation: kv-keycap-listen 1.4s ease-in-out infinite;
+}
+
+@keyframes kv-keycap-listen {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 0 color-mix(in srgb, var(--kv-primary-accent) 28%, transparent),
+      0 1px 0 color-mix(in srgb, var(--kv-settings-fg) 10%, transparent);
+  }
+
+  50% {
+    box-shadow:
+      0 0 0 4px color-mix(in srgb, var(--kv-primary-accent) 12%, transparent),
+      0 1px 0 color-mix(in srgb, var(--kv-settings-fg) 10%, transparent);
+  }
+}
+
+[data-theme="dark"] .kv-keycap--listening {
+  animation: kv-keycap-listen-dark 1.4s ease-in-out infinite;
+}
+
+@keyframes kv-keycap-listen-dark {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 0 color-mix(in srgb, var(--kv-primary-accent) 22%, transparent),
+      0 1px 0 color-mix(in srgb, #000 40%, transparent);
+  }
+
+  50% {
+    box-shadow:
+      0 0 0 4px color-mix(in srgb, var(--kv-primary-accent) 10%, transparent),
+      0 1px 0 color-mix(in srgb, #000 40%, transparent);
+  }
+}
+
+.kv-hotkey-field__engine {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--kv-settings-muted);
+}
+
+.kv-hotkey-field__engine code {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(
+    in srgb,
+    var(--kv-settings-fg) 7%,
+    var(--kv-settings-bg)
+  );
+}
+
+.kv-hotkey-field__actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.kv-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--kv-primary-accent);
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.kv-button[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.kv-button.kv-secondary {
+  background: var(--kv-settings-card);
+  color: var(--kv-settings-fg);
+  border: 1px solid var(--kv-settings-border);
+}
+
+.kv-button.kv-danger {
+  background: var(--kv-settings-danger);
+}
+
+/* Inline busy indicator (license activate / deactivate) */
+.kv-spinner {
+  box-sizing: border-box;
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: kv-spinner-rotate 0.55s linear infinite;
+}
+
+.kv-button.kv-secondary .kv-spinner {
+  border-color: color-mix(in srgb, currentColor 38%, transparent);
+  border-top-color: currentColor;
+}
+
+@keyframes kv-spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kv-spinner {
+    animation: none;
+    border-color: color-mix(in srgb, currentColor 55%, transparent);
+    border-top-color: currentColor;
+    opacity: 0.9;
+  }
+}
+
+.kv-license-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: color-mix(in srgb, var(--kv-primary-accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--kv-primary-accent) 30%, transparent);
+  border-radius: 12px;
+  margin-bottom: 16px;
+}
+
+.kv-license-input {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 16px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 1px solid var(--kv-settings-border);
+  border-radius: 8px;
+  background: var(--kv-settings-bg);
+  color: var(--kv-settings-fg);
+}
+
+.kv-license-error {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--kv-settings-danger) 12%, transparent);
+  color: var(--kv-settings-danger);
+  font-size: 13px;
+}
+
+.kv-license-footnote {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: color-mix(in srgb, var(--kv-settings-muted) 88%, var(--kv-settings-fg));
+}
+
+.kv-license-footnote__line {
+  margin: 0;
+}
+
+.kv-license-footnote__link {
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: none;
+  color: color-mix(in srgb, var(--kv-settings-muted) 28%, var(--kv-primary-accent));
+  font: inherit;
+  font-size: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.kv-license-footnote__link:hover {
+  color: var(--kv-primary-accent);
+}
+
+.kv-license-footnote__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.kv-license-footnote__meta-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: color-mix(in srgb, var(--kv-settings-muted) 75%, var(--kv-settings-fg));
+}
+
+.kv-license-footnote__id {
+  margin: 0;
+  padding: 5px 10px;
+  max-width: 100%;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--kv-settings-border) 90%, transparent);
+  background: color-mix(in srgb, var(--kv-settings-fg) 4%, transparent);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  color: var(--kv-settings-fg);
+  cursor: pointer;
+  text-align: left;
+  word-break: break-all;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.kv-license-footnote__id:hover {
+  border-color: color-mix(in srgb, var(--kv-primary-accent) 45%, var(--kv-settings-border));
+  background: color-mix(in srgb, var(--kv-primary-accent) 8%, transparent);
+}
+
+.kv-license-footnote__id:active {
+  transform: scale(0.99);
+}
+
+.kv-license-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--kv-settings-success) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--kv-settings-success) 30%, transparent);
+}
+
+.kv-license-status[data-state="lifetime"] {
+  background: color-mix(in srgb, #f5d76e 12%, transparent);
+  border-color: color-mix(in srgb, #f5d76e 40%, transparent);
+}
+
+.kv-license-expiry-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.kv-license-expiry-alert__icon {
+  flex-shrink: 0;
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.kv-license-expiry-alert__body {
+  min-width: 0;
+  flex: 1;
+}
+
+.kv-license-expiry-alert__body p {
+  margin: 0 0 6px;
+}
+
+.kv-license-expiry-alert[data-tone="notice"] {
+  background: color-mix(in srgb, var(--kv-primary-accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--kv-primary-accent) 28%, transparent);
+}
+
+.kv-license-expiry-alert[data-tone="warn"] {
+  background: color-mix(in srgb, #d97706 12%, transparent);
+  border: 1px solid color-mix(in srgb, #d97706 35%, transparent);
+  color: var(--kv-settings-fg);
+}
+
+.kv-license-expiry-alert[data-tone="urgent"] {
+  background: color-mix(in srgb, var(--kv-settings-danger) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--kv-settings-danger) 32%, transparent);
+}
