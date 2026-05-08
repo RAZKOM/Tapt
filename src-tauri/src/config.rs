@@ -2,7 +2,7 @@
 //! position. Persisted via `tauri-plugin-store` to a platform-
 //! appropriate path (Windows):
 //!
-//!   `%APPDATA%\com.tapt.app\config.json`
+//!   `%APPDATA%\com.razkom.tapt\config.json`
 
 use serde::{Deserialize, Serialize};
 
