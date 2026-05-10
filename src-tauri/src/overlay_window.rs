@@ -305,14 +305,20 @@ impl OverlayApp {
 
     #[cfg(windows)]
     fn sync_overlay_monitor(&mut self, frame: &mut eframe::Frame, config: &Config) {
+        let Some(hwnd) = win32_hwnd(frame) else {
+            return;
+        };
+        // `SetWindowPos` with `HWND_TOPMOST` only runs in `apply_overlay_monitor_rect`, which
+        // is skipped once the outer rect matches the chosen monitor. Winit / the compositor /
+        // other topmost windows can still drop `WS_EX_TOPMOST` without changing our size or
+        // position — refresh z-order every frame (no move, no size, no activation steal).
+        ensure_overlay_topmost(hwnd);
+
         let target = config
             .position
             .overlay_monitor
             .or_else(|| crate::monitors::primary_monitor_rect());
         let Some(target) = target else {
-            return;
-        };
-        let Some(hwnd) = win32_hwnd(frame) else {
             return;
         };
         if !overlay_outer_rect_matches_monitor(hwnd, &target) {
@@ -381,6 +387,25 @@ fn overlay_logical_client_rect(ctx: &egui::Context, hwnd: Option<windows_sys::Wi
         return ctx.screen_rect();
     }
     egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h))
+}
+
+#[cfg(windows)]
+fn ensure_overlay_topmost(hwnd: windows_sys::Win32::Foundation::HWND) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+    };
+
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+    }
 }
 
 #[cfg(windows)]
