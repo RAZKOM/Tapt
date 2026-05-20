@@ -17,7 +17,7 @@ interface ConfigState {
   setDisplay: (patch: Partial<DisplayConfig>) => void;
   setBehavior: (patch: Partial<BehaviorConfig>) => void;
   setPosition: (patch: Partial<PositionConfig>) => void;
-  /** Appearance tab covers theme + overlays + feeds + keyboard sizing; fades live in Behaviour. */
+  /** Appearance tab covers theme + overlays + feeds + keyboard sizing; fades live in Behavior. */
   resetAppearanceDefaults: () => void;
   resetBehaviorDefaults: () => void;
   /** Position tab: monitors + snaps + feeds + keyboard placement + persistence. */

@@ -147,6 +147,12 @@ You can also place an end time in **`license_variables`** (e.g. `expiresAt` per 
 
 If **`licenseExpiresAt` is absent** from the JSON the SDK stores between heartbeats, expiry copy falls back to the persisted ceiling until the next successful login. Prefer including the same top-level license fields on **`/auth/heartbeat`** success payloads whenever possible.
 
+### App version and updates
+
+The installed build version comes from **`src-tauri/Cargo.toml`** / **`tauri.conf.json`** (`CARGO_PKG_VERSION` at compile time). Bump both when you cut a release.
+
+Set AuthForge **`app_variables.version`** to the latest shipped build (e.g. `1.0.1` or `v1.0.1`). After login, the settings UI compares that value to the running build; when the server version is newer, a banner offers **Download** (opens [razkom.com/tapt](https://razkom.com/tapt/)). The License tab footer always shows the installed version.
+
 ### Error mapping
 
 All 18 `AuthForgeError` variants are mapped to user-facing strings in `error_to_message`. The frontend receives both a stable `code` (snake_case) and the localized `message` so the License tab can branch on the code while displaying the message.

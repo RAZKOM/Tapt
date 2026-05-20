@@ -43,6 +43,14 @@ export interface PurchaseUrls {
   authforge_app_id: string;
 }
 
+/** Mirrors `src-tauri/src/version.rs` — installed vs AuthForge `app_variables.version`. */
+export interface UpdateStatus {
+  current_version: string;
+  latest_version: string | null;
+  update_available: boolean;
+  releases_url: string;
+}
+
 export type Theme = "light" | "dark" | "system" | "custom";
 export type DisplayMode = "key-feed" | "keyboard-overlay";
 export type FeedDirection = "vertical" | "horizontal";

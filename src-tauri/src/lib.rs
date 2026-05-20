@@ -13,6 +13,7 @@ pub mod monitors;
 pub mod overlay;
 pub mod overlay_window;
 pub mod toggle_shortcut;
+pub mod version;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -30,6 +31,8 @@ pub struct AuthStatusPayload {
     pub authenticated: bool,
     pub reason: String,
 }
+
+pub use version::UpdateStatus;
 
 /// License classification used by the License tab UI. The real
 /// AuthForge SDK doesn't categorize licenses itself, so we derive
@@ -102,6 +105,8 @@ pub struct SharedState {
     /// [`AuthForgeClient`] has not finished `logout()` yet — lets us emit
     /// `auth-status-changed` before the blocking heartbeat join.
     pub auth_ui_suppressed: AtomicBool,
+    /// True while `main::startup_sequence` is verifying a saved license key.
+    pub startup_auth_pending: AtomicBool,
 }
 
 impl SharedState {
@@ -112,6 +117,7 @@ impl SharedState {
             overlay_enabled: AtomicBool::new(true),
             auth_transition_lock: Mutex::new(()),
             auth_ui_suppressed: AtomicBool::new(false),
+            startup_auth_pending: AtomicBool::new(false),
         }
     }
 }

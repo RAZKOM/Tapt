@@ -7,18 +7,26 @@ import {
   PRODUCT_DISPLAY_NAME,
 } from "../../branding";
 import { useAuthStore } from "../../store/authStore";
+import AppVersionLine from "../components/AppVersionLine";
 import type {
   LicenseFailure,
   LicenseInfo,
   LicenseType,
   PurchaseUrls,
+  UpdateStatus,
 } from "../../types";
 
 const KEY_REGEX = /^[A-Z0-9-]+$/;
 
-export default function LicenseTab() {
+interface LicenseTabProps {
+  updateStatus: UpdateStatus | null;
+}
+
+export default function LicenseTab({ updateStatus }: LicenseTabProps) {
   const authenticated = useAuthStore((s) => s.authenticated);
+  const authReason = useAuthStore((s) => s.reason);
   const licenseInfo = useAuthStore((s) => s.licenseInfo);
+  const checkingLicense = authReason === "checking";
   const setLicenseInfo = useAuthStore((s) => s.setLicenseInfo);
   const setAuthenticated = useAuthStore((s) => s.setAuthenticated);
 
@@ -113,6 +121,35 @@ export default function LicenseTab() {
     }
   }
 
+  if (checkingLicense) {
+    return (
+      <div className="kv-license-tab">
+        <div className="kv-license-tab__main">
+          <h2 className="kv-section-title">License</h2>
+          <div
+            className="kv-license-status"
+            data-state="checking"
+            role="status"
+            aria-live="polite"
+          >
+            <span className="kv-spinner" aria-hidden />
+            <div>
+              <div style={{ fontWeight: 600 }}>Checking license…</div>
+              <div style={{ fontSize: 13, color: "var(--kv-settings-muted)" }}>
+                Verifying your saved license with the server.
+              </div>
+            </div>
+          </div>
+        </div>
+        <LicenseTabFooter
+          updateStatus={updateStatus}
+          appId={purchaseUrls?.authforge_app_id?.trim() ?? ""}
+          onOpenPortal={() => void openAuthForgePortal()}
+        />
+      </div>
+    );
+  }
+
   if (authenticated && licenseInfo) {
     return (
       <ActiveState
@@ -120,8 +157,7 @@ export default function LicenseTab() {
         onDeactivate={deactivate}
         onOpenPortal={() => void openAuthForgePortal()}
         authforgeAppId={purchaseUrls?.authforge_app_id?.trim() ?? ""}
-        purchaseUrls={purchaseUrls}
-        onBuy={(url) => void buy(url)}
+        updateStatus={updateStatus}
         busy={busy}
         error={error}
       />
@@ -206,13 +242,29 @@ export default function LicenseTab() {
         </div>
       </div>
 
-      <footer className="kv-license-footnote-wrap">
-        <LicensePortalFootnote
-          appId={purchaseUrls?.authforge_app_id?.trim() ?? ""}
-          onOpenPortal={() => void openAuthForgePortal()}
-        />
-      </footer>
+      <LicenseTabFooter
+        updateStatus={updateStatus}
+        appId={purchaseUrls?.authforge_app_id?.trim() ?? ""}
+        onOpenPortal={() => void openAuthForgePortal()}
+      />
     </div>
+  );
+}
+
+function LicenseTabFooter({
+  updateStatus,
+  appId,
+  onOpenPortal,
+}: {
+  updateStatus: UpdateStatus | null;
+  appId: string;
+  onOpenPortal: () => void;
+}) {
+  return (
+    <footer className="kv-license-footnote-wrap">
+      <AppVersionLine status={updateStatus} />
+      <LicensePortalFootnote appId={appId} onOpenPortal={onOpenPortal} />
+    </footer>
   );
 }
 
@@ -257,8 +309,7 @@ interface ActiveProps {
   onDeactivate: () => void;
   onOpenPortal: () => void;
   authforgeAppId: string;
-  purchaseUrls: PurchaseUrls | null;
-  onBuy: (url: string) => void;
+  updateStatus: UpdateStatus | null;
 }
 
 const SEC = 1;
@@ -295,7 +346,7 @@ function expiryCopyFor(
 
   if (remainingSec <= 0) {
     return {
-      subtitle: `${shortNoun} ended (${endDate}). Use the checkout buttons below to buy another license, then activate your new key.`,
+      subtitle: `${shortNoun} ended (${endDate}). Purchase a new license, then activate your new key on this device.`,
       banner: {
         tone: "urgent",
         message:
@@ -336,24 +387,24 @@ function expiryCopyFor(
       tone: "urgent",
       message:
         licenseType === "trial"
-          ? "Trial ending very soon — use the checkout buttons below to buy a paid license."
-          : "License expires very soon — use the checkout buttons below to purchase another term.",
+          ? "Trial ending very soon — purchase a paid license, then activate your new key."
+          : "License expires very soon — purchase another term, then activate your new key.",
     };
   } else if (remainingSec <= 7 * DAY) {
     banner = {
       tone: "warn",
       message:
         licenseType === "trial"
-          ? "Trial ends this week — use the checkout buttons below when you’re ready."
-          : "Your license ends this week — use the checkout buttons below to purchase another term.",
+          ? "Trial ends this week — purchase a paid license when you’re ready."
+          : "Your license ends this week — purchase another term when you’re ready.",
     };
   } else if (remainingSec <= 14 * DAY) {
     banner = {
       tone: "notice",
       message:
         licenseType === "trial"
-          ? "Trial ending soon — use the checkout buttons below when you pick a license."
-          : "License ending soon — use the checkout buttons below to purchase another term.",
+          ? "Trial ending soon — purchase a paid license when you pick a plan."
+          : "License ending soon — purchase another term before this one ends.",
     };
   }
 
@@ -426,8 +477,7 @@ function ActiveState({
   onDeactivate,
   onOpenPortal,
   authforgeAppId,
-  purchaseUrls,
-  onBuy,
+  updateStatus,
 }: ActiveProps) {
   const isLifetime = info.license_type === "lifetime";
   const periodEnd = info.subscription_period_end_unix;
@@ -475,16 +525,6 @@ function ActiveState({
 
         {expiry.banner ? (
           <ExpiryAlertBanner tone={expiry.banner.tone} message={expiry.banner.message} />
-        ) : null}
-
-        {!isLifetime ? (
-          <div style={{ marginTop: 20 }}>
-            <LicenseCheckoutButtons
-              heading="Need another license?"
-              purchaseUrls={purchaseUrls}
-              onBuy={onBuy}
-            />
-          </div>
         ) : null}
 
         <div style={{ marginTop: 16 }}>
@@ -570,9 +610,11 @@ function ActiveState({
         {error && <div className="kv-license-error">{error}</div>}
       </div>
 
-      <footer className="kv-license-footnote-wrap">
-        <LicensePortalFootnote appId={authforgeAppId} onOpenPortal={onOpenPortal} />
-      </footer>
+      <LicenseTabFooter
+        updateStatus={updateStatus}
+        appId={authforgeAppId}
+        onOpenPortal={onOpenPortal}
+      />
     </div>
   );
 }

@@ -26,7 +26,7 @@ export default function BehaviorTab() {
   return (
     <div>
       <TabResetBar
-        title="Behaviour"
+        title="Behavior"
         onReset={() => {
           resetBehaviorDefaults();
           void persistConfig().then(() =>

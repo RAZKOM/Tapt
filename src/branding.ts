@@ -11,3 +11,6 @@ export const PRODUCT_MARK = "Tapt";
  * @see https://docs.authforge.cc/features/portal
  */
 export const AUTHFORGE_CUSTOMER_PORTAL_URL = "https://portal.authforge.cc";
+
+/** Product download page — keep in sync with `src-tauri/src/version.rs` `RELEASES_URL`. */
+export const RELEASES_URL = "https://razkom.com/tapt/";

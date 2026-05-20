@@ -76,6 +76,48 @@ body:has(.kv-settings) {
   align-items: center;
 }
 
+.kv-update-banner {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--kv-settings-accent, #04cfe5) 12%, transparent);
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--kv-settings-accent, #04cfe5) 35%, transparent);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.kv-update-banner__text {
+  min-width: 0;
+}
+
+.kv-update-banner__btn {
+  flex-shrink: 0;
+}
+
+.kv-about-version {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--kv-settings-muted);
+}
+
+.kv-about-version__label {
+  font-weight: 500;
+  color: var(--kv-settings-fg);
+}
+
+.kv-about-version__value {
+  font-variant-numeric: tabular-nums;
+}
+
+.kv-about-version__hint {
+  color: var(--kv-settings-muted);
+}
+
 .kv-titlebar__brand .kv-brand-wordmark {
   font-size: 15px;
   font-weight: 650;
@@ -788,6 +830,10 @@ body:has(.kv-settings) {
   font-size: 13px;
 }
 
+.kv-license-footnote-wrap .kv-about-version {
+  margin: 0 0 4px;
+}
+
 .kv-license-footnote {
   margin: 0;
   display: flex;
@@ -870,6 +916,11 @@ body:has(.kv-settings) {
   border-radius: 12px;
   background: color-mix(in srgb, var(--kv-settings-success) 8%, transparent);
   border: 1px solid color-mix(in srgb, var(--kv-settings-success) 30%, transparent);
+}
+
+.kv-license-status[data-state="checking"] {
+  border-color: color-mix(in srgb, var(--kv-settings-accent) 35%, transparent);
+  background: color-mix(in srgb, var(--kv-settings-accent) 8%, transparent);
 }
 
 .kv-license-status[data-state="lifetime"] {

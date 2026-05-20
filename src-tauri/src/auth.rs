@@ -38,7 +38,7 @@ use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_store::StoreExt;
 
 use crate::config::{Config, CONFIG_STORE_KEY, STORE_FILE};
-use crate::{mask_hwid, AuthStatusPayload, LicenseInfo, LicenseType, SharedState};
+use crate::{mask_hwid, AuthStatusPayload, LicenseInfo, LicenseType, SharedState, UpdateStatus};
 
 include!(concat!(env!("OUT_DIR"), "/secrets.rs"));
 
@@ -592,8 +592,18 @@ pub async fn deactivate_license(
 
 #[tauri::command]
 pub fn get_auth_status(state: State<'_, AuthState>) -> AuthStatusPayload {
+    let shared = state.shared();
+    if shared
+        .startup_auth_pending
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return AuthStatusPayload {
+            authenticated: false,
+            reason: "checking".into(),
+        };
+    }
     AuthStatusPayload {
-        authenticated: overlay_license_gate(state.shared().as_ref()),
+        authenticated: overlay_license_gate(shared.as_ref()),
         reason: String::new(),
     }
 }
@@ -625,6 +635,23 @@ pub fn get_license_info(app: AppHandle, state: State<'_, AuthState>) -> Option<L
 #[tauri::command]
 pub fn get_hwid_masked(_state: State<'_, AuthState>) -> String {
     mask_hwid(local_hwid())
+}
+
+#[tauri::command]
+pub fn get_update_status(state: State<'_, AuthState>) -> UpdateStatus {
+    let shared = state.shared();
+    let client = if shared
+        .startup_auth_pending
+        .load(std::sync::atomic::Ordering::SeqCst)
+        || shared.auth_ui_suppressed.load(Ordering::Relaxed)
+    {
+        None
+    } else if is_session_valid(state.client()) {
+        Some(state.client().as_ref())
+    } else {
+        None
+    };
+    crate::version::update_status_for_client(client)
 }
 
 #[tauri::command]

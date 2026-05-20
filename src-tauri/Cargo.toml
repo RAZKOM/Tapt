@@ -1,6 +1,6 @@
 [package]
 name = "tapt"
-version = "1.0.0"
+version = "1.0.1"
 description = "Tapt. — transparent keyboard overlay for streams and demos"
 authors = ["Tapt"]
 license = "Proprietary"
@@ -52,6 +52,7 @@ parking_lot = "0.12.5"
 winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] }
 raw-window-handle = "0.6.2"
 tauri-plugin-global-shortcut = "2"
+tauri-plugin-single-instance = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

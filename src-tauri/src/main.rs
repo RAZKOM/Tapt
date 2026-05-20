@@ -42,6 +42,12 @@ fn main() {
     init_windows_process_dpi();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(win) = app.get_webview_window("settings") {
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(
             tauri_plugin_autostart::Builder::new()
@@ -57,6 +63,7 @@ fn main() {
             auth::get_license_info,
             auth::get_hwid_masked,
             auth::get_purchase_urls,
+            auth::get_update_status,
             auth::get_config,
             auth::set_config,
             commands::show_settings,
@@ -81,6 +88,13 @@ fn main() {
             // 4. Tauri-managed AuthState wraps the same Arc — used by the
             //    license / config commands the settings UI invokes.
             app.manage(AuthState::new(shared.clone()));
+
+            if saved_license_key(&app_handle).is_some() {
+                shared
+                    .startup_auth_pending
+                    .store(true, Ordering::SeqCst);
+                emit_auth_status(&app_handle, false, "checking");
+            }
 
             // 5. Build tray icon menu (toggle overlay, settings, quit).
             let brand_icon = match brand_png_icon() {
@@ -135,8 +149,9 @@ fn main() {
             //    so we don't block setup().
             let app_for_startup = app_handle.clone();
             let client_for_startup = client.clone();
+            let shared_for_startup = shared.clone();
             tauri::async_runtime::spawn(async move {
-                startup_sequence(app_for_startup, client_for_startup).await;
+                startup_sequence(app_for_startup, client_for_startup, shared_for_startup).await;
             });
 
             Ok(())
@@ -157,36 +172,57 @@ fn load_config(app: &AppHandle) -> Config {
     serde_json::from_value::<Config>(raw).unwrap_or_default()
 }
 
+/// Returns a normalized license key when one is persisted and long enough.
+fn saved_license_key(app: &AppHandle) -> Option<String> {
+    let saved_raw = app
+        .store(STORE_FILE)
+        .ok()?
+        .get(LICENSE_KEY_STORE_KEY)
+        .and_then(|v| v.as_str().map(|s| s.to_string()))?;
+    let key = auth::normalize_license_key(&saved_raw);
+    if key.len() < 8 {
+        return None;
+    }
+    Some(key)
+}
+
 /// Controlled startup auth sequence: load saved license, attempt login,
 /// emit `auth-status-changed` to the settings window, focus the License
 /// tab on failure. The eframe overlay polls `overlay_license_gate` every
 /// frame (session validity plus deactivate suppression) so we don't need
 /// to "start" listeners here — they're already registered and the gate
 /// does the rest.
-async fn startup_sequence(app: AppHandle, client: Arc<authforge::AuthForgeClient>) {
-    let saved_raw = match app.store(STORE_FILE) {
-        Ok(store) => store
+async fn startup_sequence(
+    app: AppHandle,
+    client: Arc<authforge::AuthForgeClient>,
+    shared: Arc<SharedState>,
+) {
+    let finish = |authenticated: bool, reason: &str| {
+        shared
+            .startup_auth_pending
+            .store(false, Ordering::SeqCst);
+        emit_auth_status(&app, authenticated, reason);
+    };
+
+    let Some(key) = saved_license_key(&app) else {
+        if app.store(STORE_FILE).ok().and_then(|store| {
+            store
+                .get(LICENSE_KEY_STORE_KEY)
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+        }).is_some()
+        {
+            let _ = auth::clear_persisted_license_key(&app);
+        }
+        finish(false, "no-license");
+        focus_license_tab(&app);
+        return;
+    };
+
+    if let Ok(store) = app.store(STORE_FILE) {
+        let saved_raw = store
             .get(LICENSE_KEY_STORE_KEY)
-            .and_then(|v| v.as_str().map(|s| s.to_string())),
-        Err(_) => None,
-    };
-
-    let Some(saved_raw) = saved_raw else {
-        emit_unauthenticated(&app, "no-license");
-        focus_license_tab(&app);
-        return;
-    };
-
-    let key = auth::normalize_license_key(&saved_raw);
-    if key.len() < 8 {
-        let _ = auth::clear_persisted_license_key(&app);
-        emit_unauthenticated(&app, "no-license");
-        focus_license_tab(&app);
-        return;
-    }
-
-    if key != saved_raw {
-        if let Ok(store) = app.store(STORE_FILE) {
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
+        if saved_raw.as_deref() != Some(key.as_str()) {
             store.set(LICENSE_KEY_STORE_KEY, serde_json::Value::String(key.clone()));
             if let Err(e) = store.save() {
                 eprintln!("[startup] could not persist normalized license key: {e}");
@@ -201,28 +237,22 @@ async fn startup_sequence(app: AppHandle, client: Arc<authforge::AuthForgeClient
             {
                 eprintln!("[startup] could not persist license expiry: {e}");
             }
-            let _ = app.emit(
-                "auth-status-changed",
-                AuthStatusPayload {
-                    authenticated: true,
-                    reason: String::new(),
-                },
-            );
+            finish(true, "");
         }
         Err(err) => {
             eprintln!("[startup] saved license rejected: {err:?}");
             let _ = auth::clear_persisted_license_key(&app);
-            emit_unauthenticated(&app, &format!("{err:?}"));
+            finish(false, &format!("{err:?}"));
             focus_license_tab(&app);
         }
     }
 }
 
-fn emit_unauthenticated(app: &AppHandle, reason: &str) {
+fn emit_auth_status(app: &AppHandle, authenticated: bool, reason: &str) {
     let _ = app.emit(
         "auth-status-changed",
         AuthStatusPayload {
-            authenticated: false,
+            authenticated,
             reason: reason.to_string(),
         },
     );
