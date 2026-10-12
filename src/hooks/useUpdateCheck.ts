@@ -2,18 +2,16 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
 
-import { useAuthStore } from "../store/authStore";
-import type { AuthStatusPayload, UpdateStatus } from "../types";
+import type { UpdateStatus } from "../types";
 
 const RESYNC_INTERVAL_MS = 15 * 60_000;
 
 /**
- * Compare installed version (`CARGO_PKG_VERSION`) with AuthForge
- * `app_variables.version` after the session is authenticated.
+ * Compare installed version (`CARGO_PKG_VERSION`) with the latest version
+ * Rust fetched from the latest `RAZKOM/Tapt.` GitHub release. Independent of the
+ * license and the trial.
  */
 export function useUpdateCheck() {
-  const authenticated = useAuthStore((s) => s.authenticated);
-  const checkingLicense = useAuthStore((s) => s.reason) === "checking";
   const [status, setStatus] = useState<UpdateStatus | null>(null);
 
   const refresh = useCallback(async () => {
@@ -31,12 +29,9 @@ export function useUpdateCheck() {
     void (async () => {
       await refresh();
 
-      const off = await listen<AuthStatusPayload>(
-        "auth-status-changed",
-        () => {
-          void refresh();
-        },
-      );
+      const off = await listen<UpdateStatus>("update-status-changed", (event) => {
+        setStatus(event.payload);
+      });
       unlistenFn = off;
     })();
 
@@ -55,12 +50,6 @@ export function useUpdateCheck() {
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [refresh]);
-
-  useEffect(() => {
-    if (!checkingLicense) {
-      void refresh();
-    }
-  }, [authenticated, checkingLicense, refresh]);
 
   return status;
 }

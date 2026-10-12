@@ -2,21 +2,27 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openShell } from "@tauri-apps/plugin-shell";
 import { useEffect, useMemo, useState } from "react";
 
-import {
-  AUTHFORGE_CUSTOMER_PORTAL_URL,
-  PRODUCT_DISPLAY_NAME,
-} from "../../branding";
+import { RELEASES_URL, SUPPORT_EMAIL } from "../../branding";
 import { useAuthStore } from "../../store/authStore";
 import AppVersionLine from "../components/AppVersionLine";
 import type {
   LicenseFailure,
   LicenseInfo,
-  LicenseType,
   PurchaseUrls,
+  TrialStatus,
   UpdateStatus,
 } from "../../types";
 
 const KEY_REGEX = /^[A-Z0-9-]+$/;
+
+function toFailure(raw: unknown, fallback: string): LicenseFailure {
+  if (typeof raw === "string") return { code: "other", message: raw };
+  const failure = raw as Partial<LicenseFailure> | null;
+  return {
+    code: failure?.code ?? "other",
+    message: failure?.message ?? fallback,
+  };
+}
 
 interface LicenseTabProps {
   updateStatus: UpdateStatus | null;
@@ -26,20 +32,22 @@ export default function LicenseTab({ updateStatus }: LicenseTabProps) {
   const authenticated = useAuthStore((s) => s.authenticated);
   const authReason = useAuthStore((s) => s.reason);
   const licenseInfo = useAuthStore((s) => s.licenseInfo);
+  const startupError = useAuthStore((s) => s.licenseError);
+  const trial = useAuthStore((s) => s.trial);
   const checkingLicense = authReason === "checking";
   const setLicenseInfo = useAuthStore((s) => s.setLicenseInfo);
   const setAuthenticated = useAuthStore((s) => s.setAuthenticated);
 
   const [keyInput, setKeyInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<LicenseFailure | null>(null);
   const [purchaseUrls, setPurchaseUrls] = useState<PurchaseUrls | null>(null);
 
   useEffect(() => {
     void invoke<PurchaseUrls>("get_purchase_urls").then(setPurchaseUrls);
   }, []);
 
-  /** `deactivate_license` emits `auth-status-changed` before the invoke returns; clear busy so the UI does not stay on “Deactivating…” or the login form’s “Activating…”. */
+  /** `deactivate_license` emits `auth-status-changed` before the invoke returns; clear busy so the UI does not stay on “Removing…” or the login form’s “Activating…”. */
   useEffect(() => {
     if (!authenticated) {
       setBusy(false);
@@ -60,7 +68,7 @@ export default function LicenseTab({ updateStatus }: LicenseTabProps) {
     if (busy) return;
     const trimmed = keyInput.replace(/\s+/g, "").toUpperCase();
     if (!KEY_REGEX.test(trimmed) || trimmed.length < 8) {
-      setError("Enter a complete license key.");
+      setError({ code: "invalid_key", message: "Enter a complete license key." });
       return;
     }
     setBusy(true);
@@ -72,12 +80,7 @@ export default function LicenseTab({ updateStatus }: LicenseTabProps) {
       setLicenseInfo(info);
       setKeyInput("");
     } catch (rawErr) {
-      const failure = rawErr as LicenseFailure | string;
-      const message =
-        typeof failure === "string"
-          ? failure
-          : (failure?.message ?? "Activation failed.");
-      setError(message);
+      setError(toFailure(rawErr, "Activation failed."));
     } finally {
       setBusy(false);
     }
@@ -92,7 +95,7 @@ export default function LicenseTab({ updateStatus }: LicenseTabProps) {
       setAuthenticated(false, "deactivated");
       setLicenseInfo(null);
     } catch (rawErr) {
-      setError(String(rawErr));
+      setError(toFailure(rawErr, "Couldn't remove the license."));
     } finally {
       setBusy(false);
     }
@@ -100,24 +103,19 @@ export default function LicenseTab({ updateStatus }: LicenseTabProps) {
 
   async function buy(url: string) {
     if (!url) {
-      setError(
-        "Checkout URL is not configured in this build. Set STRIPE_MONTHLY_URL / STRIPE_LIFETIME_URL in src-tauri/.env.",
-      );
+      setError({
+        code: "other",
+        message: `Checkout isn't available right now. You can buy a license at ${RELEASES_URL}`,
+      });
       return;
     }
     try {
       await openShell(url);
-    } catch (err) {
-      setError(`Could not open checkout: ${String(err)}`);
-    }
-  }
-
-  async function openAuthForgePortal() {
-    try {
-      setError(null);
-      await openShell(AUTHFORGE_CUSTOMER_PORTAL_URL);
-    } catch (err) {
-      setError(`Could not open browser: ${String(err)}`);
+    } catch {
+      setError({
+        code: "other",
+        message: `Couldn't open your browser. You can buy a license at ${RELEASES_URL}`,
+      });
     }
   }
 
@@ -134,17 +132,12 @@ export default function LicenseTab({ updateStatus }: LicenseTabProps) {
           >
             <span className="kv-spinner" aria-hidden />
             <div>
-              <div style={{ fontWeight: 600 }}>Checking license…</div>
-              <div style={{ fontSize: 13, color: "var(--kv-settings-muted)" }}>
-                Verifying your saved license with the server.
-              </div>
+              <div style={{ fontWeight: 600 }}>Checking your license…</div>
             </div>
           </div>
         </div>
         <LicenseTabFooter
           updateStatus={updateStatus}
-          appId={purchaseUrls?.authforge_app_id?.trim() ?? ""}
-          onOpenPortal={() => void openAuthForgePortal()}
         />
       </div>
     );
@@ -153,10 +146,7 @@ export default function LicenseTab({ updateStatus }: LicenseTabProps) {
   if (authenticated && licenseInfo) {
     return (
       <ActiveState
-        info={licenseInfo}
         onDeactivate={deactivate}
-        onOpenPortal={() => void openAuthForgePortal()}
-        authforgeAppId={purchaseUrls?.authforge_app_id?.trim() ?? ""}
         updateStatus={updateStatus}
         busy={busy}
         error={error}
@@ -164,36 +154,15 @@ export default function LicenseTab({ updateStatus }: LicenseTabProps) {
     );
   }
 
+  // Activation errors from this tab win over the startup error from Rust.
+  const shownError = error ?? startupError;
+
   return (
     <div className="kv-license-tab">
       <div className="kv-license-tab__main">
         <h2 className="kv-section-title">License</h2>
-        <p style={{ color: "var(--kv-settings-muted)" }}>
-          {PRODUCT_DISPLAY_NAME} requires an active license to capture and display
-          your keystrokes on the overlay.
-        </p>
 
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            padding: 16,
-            marginTop: 8,
-            marginBottom: 16,
-            borderRadius: 12,
-            background: "color-mix(in srgb, var(--kv-settings-danger) 8%, transparent)",
-            border: "1px solid color-mix(in srgb, var(--kv-settings-danger) 30%, transparent)",
-          }}
-        >
-          <span style={{ fontSize: 22 }}>🔒</span>
-          <div>
-            <div style={{ fontWeight: 600 }}>No active license</div>
-            <div style={{ fontSize: 13, color: "var(--kv-settings-muted)" }}>
-              Enter a license key to activate this device.
-            </div>
-          </div>
-        </div>
+        <TrialStatusCard trial={trial} />
 
         <label
           style={{ display: "block", fontSize: 14, fontWeight: 500, marginBottom: 6 }}
@@ -231,11 +200,11 @@ export default function LicenseTab({ updateStatus }: LicenseTabProps) {
           </button>
         </div>
 
-        {error && <div className="kv-license-error">{error}</div>}
+        {shownError ? <LicenseErrorMessage error={shownError} /> : null}
 
         <div style={{ marginTop: 24 }}>
           <LicenseCheckoutButtons
-            heading="Don't have a license?"
+            heading="Don't have a key yet?"
             purchaseUrls={purchaseUrls}
             onBuy={(url) => void buy(url)}
           />
@@ -244,27 +213,92 @@ export default function LicenseTab({ updateStatus }: LicenseTabProps) {
 
       <LicenseTabFooter
         updateStatus={updateStatus}
-        appId={purchaseUrls?.authforge_app_id?.trim() ?? ""}
-        onOpenPortal={() => void openAuthForgePortal()}
       />
     </div>
   );
 }
 
-function LicenseTabFooter({
-  updateStatus,
-  appId,
-  onOpenPortal,
-}: {
-  updateStatus: UpdateStatus | null;
-  appId: string;
-  onOpenPortal: () => void;
-}) {
+function LicenseTabFooter({ updateStatus }: { updateStatus: UpdateStatus | null }) {
   return (
     <footer className="kv-license-footnote-wrap">
+      <p className="kv-license-help">
+        Need help? Email <SupportEmailLink />
+      </p>
       <AppVersionLine status={updateStatus} />
-      <LicensePortalFootnote appId={appId} onOpenPortal={onOpenPortal} />
     </footer>
+  );
+}
+
+/** "Free trial: MM:SS left", or a lock card once the trial is used up. */
+function TrialStatusCard({ trial }: { trial: TrialStatus | null }) {
+  if (trial?.active) {
+    return (
+      <div className="kv-license-status" data-state="trial" role="status">
+        <span style={{ fontSize: 22 }} aria-hidden>
+          ⏱
+        </span>
+        <div>
+          <div style={{ fontWeight: 600 }}>
+            Free trial: {formatTrialClock(trial.remaining_secs)} left
+          </div>
+          <div style={{ fontSize: 13, color: "var(--kv-settings-muted)" }}>
+            Only counts down while the overlay is on.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="kv-license-status" data-state="locked">
+      <span style={{ fontSize: 22 }} aria-hidden>
+        🔒
+      </span>
+      <div>
+        <div style={{ fontWeight: 600 }}>
+          {trial ? "Free trial ended" : "No active license"}
+        </div>
+        <div style={{ fontSize: 13, color: "var(--kv-settings-muted)" }}>
+          Buy a lifetime license, then enter your key to activate this PC.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** `MM:SS` (minutes reach 60 for a full one-hour trial). */
+function formatTrialClock(secs: number): string {
+  const clamped = Math.max(0, Math.floor(secs));
+  const m = Math.floor(clamped / 60);
+  const s = clamped % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+/** Opens a new email to the support address. */
+function SupportEmailLink() {
+  return (
+    <button
+      type="button"
+      className="kv-license-footnote__link"
+      onClick={() => void openShell(`mailto:${SUPPORT_EMAIL}`).catch(() => {})}
+    >
+      {SUPPORT_EMAIL}
+    </button>
+  );
+}
+
+/** Error text from Rust, with the support address turned into a link. */
+function LicenseErrorMessage({ error }: { error: LicenseFailure }) {
+  const parts = error.message.split(SUPPORT_EMAIL);
+  return (
+    <div className="kv-license-error" role="alert">
+      {parts.map((part, i) => (
+        <span key={i}>
+          {i > 0 ? <SupportEmailLink /> : null}
+          {part}
+        </span>
+      ))}
+    </div>
   );
 }
 
@@ -282,250 +316,58 @@ function LicenseCheckoutButtons({
       <h3 style={{ fontSize: 14, color: "var(--kv-settings-muted)", margin: 0 }}>
         {heading}
       </h3>
-      <div style={{ display: "flex", gap: 12, marginTop: 10, flexWrap: "wrap" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          marginTop: 10,
+          flexWrap: "wrap",
+        }}
+      >
         <button
           type="button"
           className="kv-button"
-          onClick={() => onBuy(purchaseUrls?.monthly ?? "")}
-        >
-          1-month license — $2.99
-        </button>
-        <button
-          type="button"
-          className="kv-button kv-secondary"
           onClick={() => onBuy(purchaseUrls?.lifetime ?? "")}
         >
-          Buy Lifetime — $9.99
+          Buy a lifetime license for $2.99
         </button>
+        <span style={{ fontSize: 13, color: "var(--kv-settings-muted)" }}>
+          One-time payment. Your key arrives by email.
+        </span>
       </div>
     </>
   );
 }
 
 interface ActiveProps {
-  info: LicenseInfo;
   busy: boolean;
-  error: string | null;
+  error: LicenseFailure | null;
   onDeactivate: () => void;
-  onOpenPortal: () => void;
-  authforgeAppId: string;
   updateStatus: UpdateStatus | null;
 }
 
-const SEC = 1;
-const HOUR = 3600 * SEC;
-const DAY = 86400 * SEC;
-
-type ExpiryTone = "notice" | "warn" | "urgent";
-
-interface ExpiryCopy {
-  subtitle: string;
-  banner: {
-    tone: ExpiryTone;
-    message: string;
-  } | null;
-}
-
-function expiryCopyFor(
-  licenseType: LicenseType,
-  periodEnd: number | null,
-  remainingSec: number | null,
-): ExpiryCopy {
-  if (licenseType === "lifetime") {
-    return { subtitle: "Never expires", banner: null };
-  }
-  if (periodEnd === null || remainingSec === null) {
-    return {
-      subtitle: "Active license",
-      banner: null,
-    };
-  }
-
-  const endDate = mediumDateTime(periodEnd);
-  const { actionLabel, shortNoun } = periodPhrase(licenseType);
-
-  if (remainingSec <= 0) {
-    return {
-      subtitle: `${shortNoun} ended (${endDate}). Purchase a new license, then activate your new key on this device.`,
-      banner: {
-        tone: "urgent",
-        message:
-          "The license server reports this license term has ended. If you already purchased a new key, try re-activating or wait for the next sync.",
-      },
-    };
-  }
-
-  const dayCount = Math.max(1, Math.ceil(remainingSec / DAY));
-  let subtitle: string;
-
-  if (remainingSec <= 48 * HOUR) {
-    const countdown = formatCountdown(remainingSec);
-    subtitle =
-      actionLabel === "expires"
-        ? `Expires in ${countdown} · ${endDate}`
-        : `${shortNoun} ends in ${countdown} · ${endDate}`;
-  } else if (remainingSec <= 7 * DAY) {
-    subtitle =
-      actionLabel === "expires"
-        ? `Expires in ${dayCount} day${dayCount === 1 ? "" : "s"} (${endDate})`
-        : `${shortNoun} ends in ${dayCount} day${dayCount === 1 ? "" : "s"} (${endDate})`;
-  } else if (remainingSec <= 14 * DAY) {
-    subtitle =
-      actionLabel === "expires"
-        ? `Expires on ${endDate} (${dayCount} days left)`
-        : `${shortNoun} ends ${endDate} (${dayCount} days left)`;
-  } else {
-    subtitle =
-      actionLabel === "expires"
-        ? `Expires on ${endDate}`
-        : `${shortNoun} ends on ${endDate}`;
-  }
-
-  let banner: ExpiryCopy["banner"] = null;
-  if (remainingSec <= 48 * HOUR) {
-    banner = {
-      tone: "urgent",
-      message:
-        licenseType === "trial"
-          ? "Trial ending very soon — purchase a paid license, then activate your new key."
-          : "License expires very soon — purchase another term, then activate your new key.",
-    };
-  } else if (remainingSec <= 7 * DAY) {
-    banner = {
-      tone: "warn",
-      message:
-        licenseType === "trial"
-          ? "Trial ends this week — purchase a paid license when you’re ready."
-          : "Your license ends this week — purchase another term when you’re ready.",
-    };
-  } else if (remainingSec <= 14 * DAY) {
-    banner = {
-      tone: "notice",
-      message:
-        licenseType === "trial"
-          ? "Trial ending soon — purchase a paid license when you pick a plan."
-          : "License ending soon — purchase another term before this one ends.",
-    };
-  }
-
-  return { subtitle, banner };
-}
-
-
-function periodPhrase(
-  t: Exclude<LicenseType, "lifetime">,
-): { actionLabel: "expires" | "ends"; shortNoun: string } {
-  switch (t) {
-    case "monthly":
-      return { actionLabel: "expires", shortNoun: "1-month license" };
-    case "trial":
-      return { actionLabel: "ends", shortNoun: "Trial" };
-    case "unknown":
-      return { actionLabel: "ends", shortNoun: "Paid period" };
-    default: {
-      const _x: never = t;
-      return _x;
-    }
-  }
-}
-
-function mediumDateTime(unix: number): string {
-  return new Date(unix * 1000).toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
-
-/** Compact countdown suitable for hourly / sub-day windows. */
-function formatCountdown(secs: number): string {
-  if (secs <= 0) return "0:00:00";
-  const d = Math.floor(secs / DAY);
-  const h = Math.floor((secs % DAY) / HOUR);
-  const m = Math.floor((secs % HOUR) / 60);
-  const s = secs % 60;
-  if (d > 0) return `${d}d ${h}h ${m}m`;
-  if (h > 0) return `${h}h ${m}m ${s}s`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
-}
-
-function ExpiryAlertBanner({
-  tone,
-  message,
-}: {
-  tone: ExpiryTone;
-  message: string;
-}) {
-  const icon = tone === "urgent" ? "⏳" : tone === "warn" ? "⚠️" : "ℹ️";
-
-  return (
-    <div className="kv-license-expiry-alert" data-tone={tone} role="status">
-      <span className="kv-license-expiry-alert__icon" aria-hidden>
-        {icon}
-      </span>
-      <div className="kv-license-expiry-alert__body">
-        <p>{message}</p>
-      </div>
-    </div>
-  );
-}
-
 function ActiveState({
-  info,
   busy,
   error,
   onDeactivate,
-  onOpenPortal,
-  authforgeAppId,
   updateStatus,
 }: ActiveProps) {
-  const isLifetime = info.license_type === "lifetime";
-  const periodEnd = info.subscription_period_end_unix;
-
-  const [tick, setTick] = useState(0);
-
-  useEffect(() => {
-    if (isLifetime || periodEnd === null) return;
-    const id = window.setInterval(() => setTick((x) => x + 1), 1000);
-    return () => window.clearInterval(id);
-  }, [isLifetime, periodEnd]);
-
-  const remainingSec = useMemo(() => {
-    if (isLifetime || periodEnd === null) return null;
-    return Math.floor(periodEnd - Date.now() / 1000);
-  }, [isLifetime, periodEnd, tick]);
-
-  const expiry = expiryCopyFor(info.license_type, periodEnd, remainingSec);
-
   const [deactivateConfirmOpen, setDeactivateConfirmOpen] = useState(false);
 
   return (
     <div className="kv-license-tab">
       <div className="kv-license-tab__main">
         <h2 className="kv-section-title">License</h2>
-        <div
-          className="kv-license-status"
-          data-state={isLifetime ? "lifetime" : "active"}
-        >
-          <span style={{ fontSize: 22 }}>{isLifetime ? "★" : "✓"}</span>
+        <div className="kv-license-status" data-state="lifetime">
+          <span style={{ fontSize: 22 }}>★</span>
           <div>
-            <div style={{ fontWeight: 600 }}>
-              License Active — {labelFor(info.license_type)}
-            </div>
+            <div style={{ fontWeight: 600 }}>Lifetime license</div>
             <div style={{ fontSize: 13, color: "var(--kv-settings-muted)" }}>
-              {expiry.subtitle}
-            </div>
-            <div
-              style={{ fontSize: 12, color: "var(--kv-settings-muted)", marginTop: 4 }}
-            >
-              Bound to this device (HWID: {info.hwid_masked})
+              Activated on this PC.
             </div>
           </div>
         </div>
-
-        {expiry.banner ? (
-          <ExpiryAlertBanner tone={expiry.banner.tone} message={expiry.banner.message} />
-        ) : null}
 
         <div style={{ marginTop: 16 }}>
           {deactivateConfirmOpen ? (
@@ -552,7 +394,7 @@ function ActiveState({
                   lineHeight: 1.4,
                 }}
               >
-                Deactivate this license?
+                Remove the license from this PC?
               </div>
               <p
                 id="kv-deactivate-confirm-desc"
@@ -563,8 +405,9 @@ function ActiveState({
                   lineHeight: 1.45,
                 }}
               >
-                This removes the license from this device until you activate again with your
-                license key.
+                Tapt will stop working on this PC until you activate it again. This
+                doesn't free up an activation on your key, but activating this PC
+                again later is free.
               </p>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                 <button
@@ -584,8 +427,8 @@ function ActiveState({
                 >
                   <LicenseButtonLabel
                     busy={busy}
-                    idleLabel="Deactivate License"
-                    busyLabel="Deactivating…"
+                    idleLabel="Remove license"
+                    busyLabel="Removing…"
                   />
                 </button>
               </div>
@@ -600,21 +443,17 @@ function ActiveState({
             >
               <LicenseButtonLabel
                 busy={busy}
-                idleLabel="Deactivate License"
-                busyLabel="Deactivating…"
+                idleLabel="Remove license from this PC"
+                busyLabel="Removing…"
               />
             </button>
           )}
         </div>
 
-        {error && <div className="kv-license-error">{error}</div>}
+        {error ? <LicenseErrorMessage error={error} /> : null}
       </div>
 
-      <LicenseTabFooter
-        updateStatus={updateStatus}
-        appId={authforgeAppId}
-        onOpenPortal={onOpenPortal}
-      />
+      <LicenseTabFooter updateStatus={updateStatus} />
     </div>
   );
 }
@@ -634,88 +473,6 @@ function LicenseButtonLabel({
       {busy ? busyLabel : idleLabel}
     </>
   );
-}
-
-async function copyTextToClipboard(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    try {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.setAttribute("readonly", "");
-      ta.style.position = "fixed";
-      ta.style.left = "-9999px";
-      document.body.appendChild(ta);
-      ta.select();
-      const ok = document.execCommand("copy");
-      document.body.removeChild(ta);
-      return ok;
-    } catch {
-      return false;
-    }
-  }
-}
-
-function LicensePortalFootnote({
-  appId,
-  onOpenPortal,
-}: {
-  appId: string;
-  onOpenPortal: () => void;
-}) {
-  const [copyLabel, setCopyLabel] = useState<"idle" | "copied" | "failed">("idle");
-
-  async function copyAppId() {
-    if (!appId) return;
-    setCopyLabel("idle");
-    const ok = await copyTextToClipboard(appId);
-    setCopyLabel(ok ? "copied" : "failed");
-    window.setTimeout(() => setCopyLabel("idle"), ok ? 1800 : 2400);
-  }
-
-  return (
-    <div className="kv-license-footnote">
-      <p className="kv-license-footnote__line">
-        Need device resets or license help? Use the{" "}
-        <button type="button" className="kv-license-footnote__link" onClick={onOpenPortal}>
-          customer portal
-        </button>{" "}
-        with your license key and checkout email.
-      </p>
-      {appId ? (
-        <div className="kv-license-footnote__meta">
-          <span className="kv-license-footnote__meta-label">App ID</span>
-          <button
-            type="button"
-            className="kv-license-footnote__id"
-            onClick={() => void copyAppId()}
-            title="Copy app ID"
-          >
-            {copyLabel === "copied"
-              ? "Copied"
-              : copyLabel === "failed"
-                ? "Copy failed, try again"
-                : appId}
-          </button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function labelFor(t: LicenseType): string {
-  switch (t) {
-    case "monthly":
-      return "1-month license";
-    case "lifetime":
-      return "Lifetime";
-    case "trial":
-      return "Trial";
-    case "unknown":
-      return "Active";
-  }
 }
 
 /**

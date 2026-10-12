@@ -54,18 +54,14 @@ export default function ThemeModeSwitcher({ className }: Props) {
         .filter(Boolean)
         .join(" ")}
       role="radiogroup"
-      aria-label="Light or dark appearance (matches your system until you pick one)"
+      aria-label="Theme"
     >
       <button
         type="button"
         role="radio"
         aria-checked={active === "light"}
         className={`kv-nav-theme__seg ${active === "light" ? "kv-nav-theme__seg--on" : ""}`}
-        title={
-          theme === "system" || theme === "custom"
-            ? "Matches your system — click to pin light appearance"
-            : "Light appearance"
-        }
+        title="Light theme"
         onClick={() => commit("light")}
       >
         Light
@@ -75,11 +71,7 @@ export default function ThemeModeSwitcher({ className }: Props) {
         role="radio"
         aria-checked={active === "dark"}
         className={`kv-nav-theme__seg ${active === "dark" ? "kv-nav-theme__seg--on" : ""}`}
-        title={
-          theme === "system" || theme === "custom"
-            ? "Matches your system — click to pin dark appearance"
-            : "Dark appearance"
-        }
+        title="Dark theme"
         onClick={() => commit("dark")}
       >
         Dark

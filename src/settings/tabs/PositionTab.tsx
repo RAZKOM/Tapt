@@ -18,7 +18,6 @@ import Section from "../components/Section";
 import Select from "../components/Select";
 import Slider from "../components/Slider";
 import TabResetBar from "../components/TabResetBar";
-import Toggle from "../components/Toggle";
 
 const PRIMARY_VALUE = "__primary__";
 
@@ -107,15 +106,14 @@ export default function PositionTab() {
     const opts: { value: string; label: string }[] = [
       {
         value: PRIMARY_VALUE,
-        label: "Primary display (default)",
+        label: "Main display",
       },
     ];
     for (let i = 0; i < list.length; i++) {
       const m = list[i]!;
-        const shortName = m.device_name.replace(/^.*\\/, "");
       opts.push({
         value: rectKey(monitorToRect(m)),
-        label: `Display ${i + 1}: ${m.width}×${m.height}${m.is_primary ? " — primary" : ""} (${shortName})`,
+        label: `Display ${i + 1} (${m.width}×${m.height}${m.is_primary ? ", main" : ""})`,
       });
     }
     const cur = position.overlay_monitor;
@@ -125,7 +123,7 @@ export default function PositionTab() {
     ) {
       opts.push({
         value: rectKey(cur),
-        label: `Saved display (${cur.width}×${cur.height}) — not detected now`,
+        label: `Saved display (${cur.width}×${cur.height}), not connected`,
       });
     }
     return opts;
@@ -184,26 +182,17 @@ export default function PositionTab() {
         }}
       />
 
-      <Section
-        title="Overlay display"
-        description="Monitors come from Windows in virtual-desktop coordinates (same spatial layout as in Display Settings). The preview scales that layout to fit the box below and centers it — relative positions match your desk; margin inside the preview is symmetric."
-      >
-        {monitorLoadError != null ? (
+      {monitorLoadError != null ? (
+        <Section title="Display">
           <p style={{ color: "var(--kv-settings-danger, #f87171)", margin: 0 }}>
-            Could not list displays ({monitorLoadError}). Try restarting the
-            app.
+            Couldn't detect your displays. Restart Tapt to try again.
           </p>
-        ) : monitors === null ? (
-          <p style={{ color: "var(--kv-settings-muted)", margin: 0 }}>
-            Detecting displays…
-          </p>
-        ) : monitors.length <= 1 ? (
-          <p style={{ color: "var(--kv-settings-muted)", margin: 0 }}>
-            Only one display was reported by the system. If you use multiple
-            monitors, check cabling / “Extend these displays” in Windows
-            settings.
-          </p>
-        ) : (
+        </Section>
+      ) : monitors !== null && monitors.length > 1 ? (
+        <Section
+          title="Display"
+          description="Choose the screen the overlay appears on. Click a screen in the preview or pick it from the list."
+        >
           <>
             {schematic && (
               <div
@@ -257,49 +246,44 @@ export default function PositionTab() {
               </div>
             )}
             <Select
-              label="Monitor"
+              label="Display"
               value={selectedMonitorKey}
               onChange={onMonitorSelect}
               options={monitorSelectOptions}
             />
           </>
-        )}
-      </Section>
-
-      {isPills && (
-        <p style={{ color: "var(--kv-settings-muted)" }}>
-          Snap the key feed pills to a screen corner or place them freely.
-        </p>
-      )}
-
-      {isKeyboard && (
-        <p style={{ color: "var(--kv-settings-muted)" }}>
-          Anchor the keyboard panel on screen and nudge it with pixel offsets.
-        </p>
-      )}
+        </Section>
+      ) : null}
 
       {isPills && (
         <>
-          <Section title="Snap (key feed)">
+          <Section title="Placement">
             <Select
               label="Corner"
               value={position.snap}
               onChange={(v) => updatePosition("snap", v)}
               options={[
-                { value: "top-left", label: "Top Left" },
-                { value: "top-right", label: "Top Right" },
-                { value: "bottom-left", label: "Bottom Left" },
-                { value: "bottom-right", label: "Bottom Right" },
-                { value: "free", label: "Free / manual" },
+                { value: "top-left", label: "Top left" },
+                { value: "top-right", label: "Top right" },
+                { value: "bottom-left", label: "Bottom left" },
+                { value: "bottom-right", label: "Bottom right" },
+                { value: "free", label: "Custom" },
               ]}
             />
           </Section>
 
-          <Section title="Offset (key feed)">
+          <Section
+            title="Fine-tune"
+            description={
+              position.snap === "free"
+                ? "Distance from the top-left corner of the screen. The arrows move it one pixel at a time."
+                : "Distance from the corner. The arrows move it one pixel at a time."
+            }
+          >
             <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
               <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 12 }}>
                 <Slider
-                  label="Offset X"
+                  label="Horizontal"
                   min={0}
                   max={400}
                   value={position.offset_x}
@@ -307,7 +291,7 @@ export default function PositionTab() {
                   formatter={(n) => `${n}px`}
                 />
                 <Slider
-                  label="Offset Y"
+                  label="Vertical"
                   min={0}
                   max={400}
                   value={position.offset_y}
@@ -365,18 +349,16 @@ export default function PositionTab() {
                   }}
                 />
               </div>
-      
             </div>
-    
           </Section>
         </>
       )}
 
       {isKeyboard && (
         <>
-          <Section title="Snap (keyboard overlay)">
+          <Section title="Placement">
             <Select
-              label="Anchor"
+              label="Position on screen"
               value={display.keyboard_anchor}
               onChange={(v) => patchDisplay("keyboard_anchor", v)}
               options={KEYBOARD_ANCHORS}
@@ -384,17 +366,17 @@ export default function PositionTab() {
           </Section>
 
           <Section
-            title="Offset (keyboard overlay)"
+            title="Fine-tune"
             description={
               display.keyboard_anchor === "free"
-                ? "Offsets are pixels from the top-left of the overlay (full screen)."
-                : "Nudge from the anchored spot in pixels — positive vertical values lift the panel up from bottom-aligned edges."
+                ? "Distance from the top-left corner of the screen. The arrows move it one pixel at a time."
+                : "Shift the keyboard from its position. The arrows move it one pixel at a time."
             }
           >
             <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
               <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 12 }}>
                 <Slider
-                  label="Fine-tune horizontal (px)"
+                  label="Horizontal"
                   min={-400}
                   max={400}
                   value={display.keyboard_offset_x}
@@ -402,7 +384,7 @@ export default function PositionTab() {
                   formatter={(n) => `${n}px`}
                 />
                 <Slider
-                  label="Fine-tune vertical (px)"
+                  label="Vertical"
                   min={-400}
                   max={400}
                   value={display.keyboard_offset_y}
@@ -468,14 +450,6 @@ export default function PositionTab() {
           </Section>
         </>
       )}
-
-      <Section title="Persistence">
-        <Toggle
-          label="Remember overlay position settings between launches"
-          checked={position.remember_position}
-          onChange={(v) => updatePosition("remember_position", v)}
-        />
-      </Section>
     </div>
   );
 }

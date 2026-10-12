@@ -1,5 +1,5 @@
 //! Build script: reads `.env` (next to this file) and re-exports the
-//! AuthForge and Stripe values as `cargo:rustc-env=...` so the Rust
+//! AuthForge values and the Stripe checkout URL as `cargo:rustc-env=...` so the Rust
 //! source can `env!()` them at compile time.
 //!
 //! Behavior:
@@ -20,7 +20,6 @@ const REQUIRED_RELEASE_VARS: &[&str] = &[
     "AUTHFORGE_APP_ID",
     "AUTHFORGE_APP_SECRET",
     "AUTHFORGE_PUBLIC_KEY",
-    "STRIPE_MONTHLY_URL",
     "STRIPE_LIFETIME_URL",
 ];
 
@@ -28,7 +27,6 @@ const ALL_VARS: &[&str] = &[
     "AUTHFORGE_APP_ID",
     "AUTHFORGE_APP_SECRET",
     "AUTHFORGE_PUBLIC_KEY",
-    "STRIPE_MONTHLY_URL",
     "STRIPE_LIFETIME_URL",
 ];
 
@@ -110,7 +108,6 @@ fn write_secrets_module() {
     let app_id = env::var("AUTHFORGE_APP_ID").unwrap_or_default();
     let app_secret = env::var("AUTHFORGE_APP_SECRET").unwrap_or_default();
     let public_key = env::var("AUTHFORGE_PUBLIC_KEY").unwrap_or_default();
-    let stripe_monthly = env::var("STRIPE_MONTHLY_URL").unwrap_or_default();
     let stripe_lifetime = env::var("STRIPE_LIFETIME_URL").unwrap_or_default();
 
     let body = format!(
@@ -136,11 +133,6 @@ pub(crate) fn authforge_public_key() -> String {{
 }}
 
 #[inline(always)]
-pub(crate) fn stripe_monthly_url() -> String {{
-    cryptify::encrypt_string!({stripe_monthly}).to_string()
-}}
-
-#[inline(always)]
 pub(crate) fn stripe_lifetime_url() -> String {{
     cryptify::encrypt_string!({stripe_lifetime}).to_string()
 }}
@@ -148,7 +140,6 @@ pub(crate) fn stripe_lifetime_url() -> String {{
         app_id = quote_literal(&app_id),
         app_secret = quote_literal(&app_secret),
         public_key = quote_literal(&public_key),
-        stripe_monthly = quote_literal(&stripe_monthly),
         stripe_lifetime = quote_literal(&stripe_lifetime),
     );
 

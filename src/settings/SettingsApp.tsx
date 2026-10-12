@@ -5,7 +5,7 @@ import { useAuthGuard } from "../hooks/useAuthGuard";
 import { useConfig } from "../hooks/useConfig";
 import { useThemeTokens } from "../hooks/useThemeTokens";
 import { useUpdateCheck } from "../hooks/useUpdateCheck";
-import { useAuthStore } from "../store/authStore";
+import { canUseApp, useAuthStore } from "../store/authStore";
 import OverlayModeSwitcher from "./components/OverlayModeSwitcher";
 import SettingsTitleBar from "./components/SettingsTitleBar";
 import UpdateBanner from "./components/UpdateBanner";
@@ -33,20 +33,20 @@ export default function SettingsApp() {
   useThemeTokens(settingsRoot);
   const updateStatus = useUpdateCheck();
 
-  const authenticated = useAuthStore((s) => s.authenticated);
+  // Licensed, or free-trial time left.
+  const usable = useAuthStore(canUseApp);
+  const trialEnded = useAuthStore((s) => s.trial?.active === false);
   const checkingLicense = useAuthStore((s) => s.reason) === "checking";
-  const [active, setActive] = useState<TabId>(
-    authenticated ? "display" : "license",
-  );
+  const [active, setActive] = useState<TabId>(usable ? "display" : "license");
 
   useEffect(() => {
-    if ((!authenticated || checkingLicense) && active !== "license") {
+    if ((!usable || checkingLicense) && active !== "license") {
       setActive("license");
     }
-  }, [authenticated, checkingLicense, active]);
+  }, [usable, checkingLicense, active]);
 
   // Rust can request the License tab via this event (e.g. when a
-  // saved license rejects on startup).
+  // saved license rejects on startup or the trial runs out).
   useEffect(() => {
     let off: (() => void) | null = null;
     void (async () => {
@@ -65,8 +65,7 @@ export default function SettingsApp() {
         <nav className="kv-tabs" aria-label="Settings tabs">
           <div className="kv-tabs__scroll">
             {TABS.map((t) => {
-              const locked =
-                (!authenticated || checkingLicense) && t.id !== "license";
+              const locked = (!usable || checkingLicense) && t.id !== "license";
               return (
                 <button
                   key={t.id}
@@ -76,7 +75,9 @@ export default function SettingsApp() {
                   disabled={locked}
                   title={
                     locked
-                      ? "Activate a license to change behavior, appearance, and position."
+                      ? trialEnded
+                        ? "Your free trial has ended. Activate a license to change settings."
+                        : "Activate a license to change settings."
                       : undefined
                   }
                   onClick={() => setActive(t.id)}
@@ -86,7 +87,7 @@ export default function SettingsApp() {
               );
             })}
           </div>
-          {authenticated && (
+          {usable && (
             <div className="kv-tabs__quick" aria-label="Quick settings">
               <div className="kv-tabs__quick-group">
                 <div className="kv-tabs__quick-label">Overlay mode</div>

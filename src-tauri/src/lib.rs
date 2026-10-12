@@ -13,7 +13,10 @@ pub mod monitors;
 pub mod overlay;
 pub mod overlay_window;
 pub mod toggle_shortcut;
+pub mod trial;
 pub mod version;
+#[cfg(windows)]
+pub mod win_registry;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -22,42 +25,27 @@ use authforge::AuthForgeClient;
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 
+use crate::auth::LicenseFailure;
 use crate::config::Config;
 
 /// Pushed on the `auth-status-changed` event whenever the session
-/// transitions between authenticated and unauthenticated.
+/// transitions between licensed and unlicensed. `authenticated` means a
+/// real license; the free trial is reported separately (`trial.rs`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthStatusPayload {
     pub authenticated: bool,
     pub reason: String,
+    /// Why activating the saved key at startup failed, for the License
+    /// tab. `None` when there is nothing to show.
+    pub error: Option<LicenseFailure>,
 }
 
 pub use version::UpdateStatus;
 
-/// License classification used by the License tab UI. The real
-/// AuthForge SDK doesn't categorize licenses itself, so we derive
-/// this from `LoginResult::license_variables` (server-controlled key
-/// `"type"` or `"plan"` taking values like `"monthly"`, `"lifetime"`,
-/// `"trial"`).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LicenseType {
-    Monthly,
-    Lifetime,
-    Trial,
-    #[default]
-    Unknown,
-}
-
-/// Returned by the `activate_license` Tauri command.
+/// Returned by `activate_license` / `get_license_info` while licensed.
+/// Every license is a lifetime license activated offline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LicenseInfo {
-    pub license_type: LicenseType,
-    /// Unix instant (seconds) for license-expiry UI: explicit period fields in
-    /// `license_variables` / `app_variables`, else top-level signed payload
-    /// `licenseExpiresAt`, else a persisted ceiling merged at login. **`expiresIn` is
-    /// session-only** and is not used here.
-    pub subscription_period_end_unix: Option<u64>,
     /// Last 4 chars of the locally-computed HWID, masked as `••••XXXX`.
     pub hwid_masked: String,
 }
@@ -92,6 +80,8 @@ pub enum InputEvent {
 /// hardening spec and inlines into every call site, so a binary patcher
 /// cannot NOP a single instruction to bypass the gate.
 pub struct SharedState {
+    /// Offline client: `activate_offline` / `login_from_file`, no network
+    /// after activation, no heartbeat.
     pub auth: Arc<AuthForgeClient>,
     /// Live user config, kept in sync with the persisted store.
     pub config: RwLock<Config>,
@@ -99,14 +89,14 @@ pub struct SharedState {
     /// the eframe overlay renders nothing even if authenticated. The
     /// auth gate still applies — both must be true to draw anything.
     pub overlay_enabled: AtomicBool,
-    /// Serialized activate/deactivate so `logout()` never races `login()`.
+    /// Serializes startup restore / activate / remove so they never race.
     pub auth_transition_lock: Mutex<()>,
-    /// While true, UI and overlay treat the session as logged out even if
-    /// [`AuthForgeClient`] has not finished `logout()` yet — lets us emit
-    /// `auth-status-changed` before the blocking heartbeat join.
-    pub auth_ui_suppressed: AtomicBool,
-    /// True while `main::startup_sequence` is verifying a saved license key.
+    /// True while `main::startup_sequence` is verifying the license file or
+    /// saved key.
     pub startup_auth_pending: AtomicBool,
+    /// Last license failure to show on the License tab (cleared on success
+    /// and on "Remove license from this PC").
+    pub license_error: Mutex<Option<LicenseFailure>>,
 }
 
 impl SharedState {
@@ -116,8 +106,8 @@ impl SharedState {
             config: RwLock::new(config),
             overlay_enabled: AtomicBool::new(true),
             auth_transition_lock: Mutex::new(()),
-            auth_ui_suppressed: AtomicBool::new(false),
             startup_auth_pending: AtomicBool::new(false),
+            license_error: Mutex::new(None),
         }
     }
 }

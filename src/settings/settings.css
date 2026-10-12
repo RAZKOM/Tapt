@@ -712,23 +712,6 @@ body:has(.kv-settings) {
   }
 }
 
-.kv-hotkey-field__engine {
-  margin-top: 10px;
-  font-size: 11px;
-  color: var(--kv-settings-muted);
-}
-
-.kv-hotkey-field__engine code {
-  font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: color-mix(
-    in srgb,
-    var(--kv-settings-fg) 7%,
-    var(--kv-settings-bg)
-  );
-}
-
 .kv-hotkey-field__actions {
   display: flex;
   gap: 8px;
@@ -830,22 +813,14 @@ body:has(.kv-settings) {
   font-size: 13px;
 }
 
+.kv-license-help {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--kv-settings-muted);
+}
+
 .kv-license-footnote-wrap .kv-about-version {
   margin: 0 0 4px;
-}
-
-.kv-license-footnote {
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  font-size: 12px;
-  line-height: 1.55;
-  color: color-mix(in srgb, var(--kv-settings-muted) 88%, var(--kv-settings-fg));
-}
-
-.kv-license-footnote__line {
-  margin: 0;
 }
 
 .kv-license-footnote__link {
@@ -866,48 +841,6 @@ body:has(.kv-settings) {
   color: var(--kv-primary-accent);
 }
 
-.kv-license-footnote__meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
-}
-
-.kv-license-footnote__meta-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: color-mix(in srgb, var(--kv-settings-muted) 75%, var(--kv-settings-fg));
-}
-
-.kv-license-footnote__id {
-  margin: 0;
-  padding: 5px 10px;
-  max-width: 100%;
-  border-radius: 8px;
-  border: 1px solid color-mix(in srgb, var(--kv-settings-border) 90%, transparent);
-  background: color-mix(in srgb, var(--kv-settings-fg) 4%, transparent);
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
-  font-size: 11px;
-  letter-spacing: 0.03em;
-  color: var(--kv-settings-fg);
-  cursor: pointer;
-  text-align: left;
-  word-break: break-all;
-  transition:
-    border-color 120ms ease,
-    background 120ms ease;
-}
-
-.kv-license-footnote__id:hover {
-  border-color: color-mix(in srgb, var(--kv-primary-accent) 45%, var(--kv-settings-border));
-  background: color-mix(in srgb, var(--kv-primary-accent) 8%, transparent);
-}
-
-.kv-license-footnote__id:active {
-  transform: scale(0.99);
-}
-
 .kv-license-status {
   display: flex;
   align-items: center;
@@ -923,49 +856,24 @@ body:has(.kv-settings) {
   background: color-mix(in srgb, var(--kv-settings-accent) 8%, transparent);
 }
 
+.kv-license-status[data-state="trial"],
+.kv-license-status[data-state="locked"] {
+  margin-top: 8px;
+  margin-bottom: 16px;
+}
+
+.kv-license-status[data-state="trial"] {
+  border-color: color-mix(in srgb, var(--kv-settings-accent) 35%, transparent);
+  background: color-mix(in srgb, var(--kv-settings-accent) 8%, transparent);
+}
+
+.kv-license-status[data-state="locked"] {
+  border-color: color-mix(in srgb, var(--kv-settings-danger) 30%, transparent);
+  background: color-mix(in srgb, var(--kv-settings-danger) 8%, transparent);
+}
+
 .kv-license-status[data-state="lifetime"] {
   background: color-mix(in srgb, #f5d76e 12%, transparent);
   border-color: color-mix(in srgb, #f5d76e 40%, transparent);
 }
 
-.kv-license-expiry-alert {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  margin-top: 14px;
-  padding: 12px 14px;
-  border-radius: 10px;
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.kv-license-expiry-alert__icon {
-  flex-shrink: 0;
-  font-size: 18px;
-  line-height: 1.2;
-}
-
-.kv-license-expiry-alert__body {
-  min-width: 0;
-  flex: 1;
-}
-
-.kv-license-expiry-alert__body p {
-  margin: 0 0 6px;
-}
-
-.kv-license-expiry-alert[data-tone="notice"] {
-  background: color-mix(in srgb, var(--kv-primary-accent) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--kv-primary-accent) 28%, transparent);
-}
-
-.kv-license-expiry-alert[data-tone="warn"] {
-  background: color-mix(in srgb, #d97706 12%, transparent);
-  border: 1px solid color-mix(in srgb, #d97706 35%, transparent);
-  color: var(--kv-settings-fg);
-}
-
-.kv-license-expiry-alert[data-tone="urgent"] {
-  background: color-mix(in srgb, var(--kv-settings-danger) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--kv-settings-danger) 32%, transparent);
-}

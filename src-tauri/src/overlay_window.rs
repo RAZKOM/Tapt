@@ -452,7 +452,9 @@ impl eframe::App for OverlayApp {
             return;
         }
 
-        // Silent gate: key capture and main overlay content only when licensed.
+        // Silent gate: key capture and main overlay content only when licensed
+        // or the free trial has time left. Running out of trial lands here
+        // exactly like an unlicensed session.
         if !overlay_license_gate(&self.state) {
             self.clear_visual_state();
             return;

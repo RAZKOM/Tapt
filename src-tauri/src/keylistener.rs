@@ -23,7 +23,8 @@ pub fn start_keylistener(state: Arc<SharedState>, tx: Sender<InputEvent>) {
     let state_for_handler = state.clone();
     let tx_for_handler = tx.clone();
     register_handler(Box::new(move |event: &Event| {
-        // Silent Gate: drop the event entirely if not authenticated.
+        // Silent Gate: drop the event entirely unless licensed or the
+        // free trial has time left.
         if !overlay_license_gate(&state_for_handler) {
             return;
         }

@@ -55,55 +55,35 @@ export default function DisplayTab() {
           void persistConfig();
         }}
       />
-      <p style={{ color: "var(--kv-settings-muted)" }}>
-        Use the sidebar for overlay mode (pills vs keyboard) and bright vs dark
-        theme — it follows your system until you tap Light or Dark. Accents
-        below tweak highlight colours for both.
-      </p>
 
       <Section
-        title="Overlay colours"
-        description="Primary and modifier accents for the key feed, keyboard overlay, and highlight tones in this UI."
+        title="Colors"
+        description="The modifier color is used for Shift, Ctrl, Alt and Win."
       >
         <ColorPicker
-          label="Primary accent"
+          label="Accent color"
           value={appearance.primary_accent}
           onChange={(v) => patchAppearance("primary_accent", v)}
         />
         <ColorPicker
-          label="Modifier accent"
+          label="Modifier color"
           value={appearance.modifier_accent}
           onChange={(v) => patchAppearance("modifier_accent", v)}
         />
       </Section>
 
+      <Section title="Key labels">
+        <Toggle
+          label="Use symbols"
+          description="Show ⇧ and ⌃ instead of Shift and Ctrl."
+          checked={appearance.use_symbols}
+          onChange={(v) => patchAppearance("use_symbols", v)}
+        />
+      </Section>
+
       {isPills && (
         <>
-          <Section
-            title="Animation"
-            description="How long keys stay visible in the feed and how many pills can show at once."
-          >
-            <Slider
-              label="Key fade duration"
-              min={500}
-              max={5000}
-              step={100}
-              value={behavior.fade_ms}
-              onChange={(v) => patchBehavior("fade_ms", v)}
-              formatter={(n) => `${n} ms`}
-            />
-            <Slider
-              label="Max visible keys"
-              min={1}
-              max={10}
-              value={behavior.max_visible_keys}
-              onChange={(v) => patchBehavior("max_visible_keys", v)}
-            />
-          </Section>
-          <Section
-            title="Key feed layout"
-            description="Where pills stack and which keys qualify."
-          >
+          <Section title="Key feed">
             <Select
               label="Direction"
               value={display.feed_direction}
@@ -115,45 +95,55 @@ export default function DisplayTab() {
             />
             {display.feed_direction === "horizontal" && (
               <Select
-                label="Along row"
+                label="New keys appear"
                 value={display.feed_row_direction}
                 onChange={(v) => patchDisplay("feed_row_direction", v)}
                 options={[
-                  {
-                    value: "left-to-right",
-                    label: "Left to right (newest at the left edge)",
-                  },
-                  {
-                    value: "right-to-left",
-                    label: "Right to left (newest at the right edge)",
-                  },
+                  { value: "left-to-right", label: "On the left" },
+                  { value: "right-to-left", label: "On the right" },
                 ]}
               />
             )}
-            <Toggle
-              label="Deduplicate keys"
-              description="Only one pill per physical key at a time (e.g. A, D, A shows A once). Turn off to show every press as its own pill."
-              checked={display.feed_deduplicate_keys}
-              onChange={(v) => patchDisplay("feed_deduplicate_keys", v)}
-            />
             <Select
-              label="Filter"
+              label="Keys to show"
               value={display.feed_filter}
               onChange={(v) => patchDisplay("feed_filter", v)}
               options={[
                 { value: "all", label: "All keys" },
                 {
                   value: "modifiers-and-combos",
-                  label: "Modifiers & combos only",
+                  label: "Modifier keys and combinations",
                 },
-                { value: "combos-only", label: "Combos only" },
+                { value: "combos-only", label: "Key combinations only" },
               ]}
+            />
+            <Toggle
+              label="Show each key once"
+              description="Pressing a key again updates it instead of adding another."
+              checked={display.feed_deduplicate_keys}
+              onChange={(v) => patchDisplay("feed_deduplicate_keys", v)}
+            />
+            <Slider
+              label="Keys shown at once"
+              min={1}
+              max={10}
+              value={behavior.max_visible_keys}
+              onChange={(v) => patchBehavior("max_visible_keys", v)}
+            />
+            <Slider
+              label="Fade out after"
+              min={500}
+              max={5000}
+              step={100}
+              value={behavior.fade_ms}
+              onChange={(v) => patchBehavior("fade_ms", v)}
+              formatter={(n) => `${(n / 1000).toFixed(1)} s`}
             />
           </Section>
 
-          <Section title="Pill styling">
+          <Section title="Style">
             <Slider
-              label="Font size"
+              label="Text size"
               min={12}
               max={32}
               value={appearance.font_size}
@@ -161,7 +151,7 @@ export default function DisplayTab() {
               formatter={(n) => `${n}px`}
             />
             <Slider
-              label="Pill opacity"
+              label="Background opacity"
               min={0}
               max={100}
               value={appearance.pill_opacity}
@@ -176,64 +166,47 @@ export default function DisplayTab() {
               onChange={(v) => patchAppearance("corner_radius", v)}
               formatter={(n) => `${n}px`}
             />
-            <Toggle
-              label="Use key symbols"
-              description="Key feed & keyboard overlay: on = modifier / nav glyphs (⇧, ⌃, …); off = short words (Shift, Ctrl, …). Fonts fall back automatically if a glyph cannot be drawn."
-              checked={appearance.use_symbols}
-              onChange={(v) => patchAppearance("use_symbols", v)}
-            />
-            <Toggle
-              label="Backdrop blur (frosted glass)"
-              description="Applied to pills when supported."
-              checked={appearance.backdrop_blur}
-              onChange={(v) => patchAppearance("backdrop_blur", v)}
-            />
           </Section>
         </>
       )}
 
       {isKeyboard && (
-        <>
-          <Section
-            title="Keyboard layout"
-            description="Inactive keys are unpressed; active keys are currently held. The dark panel uses inactive opacity only."
-          >
-            <Select
-              label="Hardware layout"
-              value={display.keyboard_layout}
-              onChange={(v) => patchDisplay("keyboard_layout", v)}
-              options={[
-                { value: "sixty", label: "60% (alphas + modifiers)" },
-                { value: "tkl", label: "TKL / Tenkeyless" },
-                { value: "full", label: "Full (with numpad)" },
-              ]}
-            />
-            <Slider
-              label="Inactive keys opacity"
-              min={0}
-              max={100}
-              value={display.keyboard_inactive_opacity}
-              onChange={(v) => patchDisplay("keyboard_inactive_opacity", v)}
-              formatter={(n) => `${n}%`}
-            />
-            <Slider
-              label="Active (pressed) keys opacity"
-              min={0}
-              max={100}
-              value={display.keyboard_active_opacity}
-              onChange={(v) => patchDisplay("keyboard_active_opacity", v)}
-              formatter={(n) => `${n}%`}
-            />
-            <Slider
-              label="Scale"
-              min={50}
-              max={150}
-              value={display.keyboard_scale}
-              onChange={(v) => patchDisplay("keyboard_scale", v)}
-              formatter={(n) => `${n}%`}
-            />
-          </Section>
-        </>
+        <Section title="Keyboard">
+          <Select
+            label="Layout"
+            value={display.keyboard_layout}
+            onChange={(v) => patchDisplay("keyboard_layout", v)}
+            options={[
+              { value: "sixty", label: "60%" },
+              { value: "tkl", label: "Tenkeyless" },
+              { value: "full", label: "Full size" },
+            ]}
+          />
+          <Slider
+            label="Size"
+            min={50}
+            max={150}
+            value={display.keyboard_scale}
+            onChange={(v) => patchDisplay("keyboard_scale", v)}
+            formatter={(n) => `${n}%`}
+          />
+          <Slider
+            label="Key opacity"
+            min={0}
+            max={100}
+            value={display.keyboard_inactive_opacity}
+            onChange={(v) => patchDisplay("keyboard_inactive_opacity", v)}
+            formatter={(n) => `${n}%`}
+          />
+          <Slider
+            label="Pressed key opacity"
+            min={0}
+            max={100}
+            value={display.keyboard_active_opacity}
+            onChange={(v) => patchDisplay("keyboard_active_opacity", v)}
+            formatter={(n) => `${n}%`}
+          />
+        </Section>
       )}
     </div>
   );

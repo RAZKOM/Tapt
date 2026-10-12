@@ -36,26 +36,25 @@ export default function BehaviorTab() {
           );
         }}
       />
-      <p style={{ color: "var(--kv-settings-muted)" }}>
-        Startup, autostart, and a system-wide shortcut to show or hide the
-        overlay.
-      </p>
 
-      <Section title="System">
+      <Section title="Startup">
         <Toggle
-          label="Open settings when the app starts"
-          description="When off, only the tray icon and overlay run until you open Settings from the tray."
-          checked={behavior.open_settings_on_startup}
-          onChange={(v) => update("open_settings_on_startup", v)}
-        />
-        <Toggle
-          label="Launch at login"
+          label="Start with Windows"
           checked={behavior.launch_at_login}
           onChange={(v) => {
             update("launch_at_login", v);
             void applyAutostart(v);
           }}
         />
+        <Toggle
+          label="Open settings on startup"
+          description="When off, Tapt starts quietly in the system tray."
+          checked={behavior.open_settings_on_startup}
+          onChange={(v) => update("open_settings_on_startup", v)}
+        />
+      </Section>
+
+      <Section title="Shortcut">
         <HotkeyField
           value={behavior.global_toggle_hotkey}
           onChange={(v) => update("global_toggle_hotkey", v)}
@@ -108,16 +107,10 @@ function HotkeyField({ value, onChange }: HotkeyFieldProps) {
   return (
     <div className="kv-hotkey-field">
       <div className="kv-hotkey-field__copy">
-        <div className="kv-hotkey-field__title">Global toggle hotkey</div>
+        <div className="kv-hotkey-field__title">Show or hide the overlay</div>
         <p className="kv-hotkey-field__hint">
-          Press the shortcut while recording — same format as system global
-          hotkeys. Esc cancels capture.
+          Works from any app. Click Record, then press the keys. Esc cancels.
         </p>
-        {value && !capturing && (
-          <div className="kv-hotkey-field__engine">
-            Engine: <code>{value}</code>
-          </div>
-        )}
       </div>
       <div className="kv-hotkey-field__controls-row">
         <div className="kv-hotkey-field__actions">
@@ -126,7 +119,7 @@ function HotkeyField({ value, onChange }: HotkeyFieldProps) {
             className={capturing ? "kv-button kv-danger" : "kv-button"}
             onClick={() => setCapturing((c) => !c)}
           >
-            {capturing ? "Cancel" : "Record shortcut"}
+            {capturing ? "Cancel" : "Record"}
           </button>
           <button
             type="button"
@@ -144,7 +137,7 @@ function HotkeyField({ value, onChange }: HotkeyFieldProps) {
               role="status"
             >
               <kbd className="kv-keycap kv-keycap--listening">Listening…</kbd>
-              <span className="kv-hotkey-listen-hint">Press keys</span>
+              <span className="kv-hotkey-listen-hint">Press a key combination</span>
             </div>
           ) : (
             <div

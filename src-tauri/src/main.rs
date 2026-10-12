@@ -5,18 +5,19 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use tapt_lib::auth::{
-    self, build_client, AuthState, LICENSE_KEY_STORE_KEY,
+    self, build_client, AuthState, LicenseFailure, StartupLicense,
 };
 use tapt_lib::config::{Config, CONFIG_STORE_KEY, STORE_FILE};
 use tapt_lib::keylistener::start_keylistener;
 use tapt_lib::overlay::focus_license_tab;
 use tapt_lib::overlay_window;
+use tapt_lib::{trial, version};
 use tapt_lib::{AuthStatusPayload, InputEvent, SharedState};
 
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton as TrayMouseButton, MouseButtonState, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, RunEvent};
 use tauri_plugin_store::StoreExt;
 
 /// `icons/32x32.png` embedded at compile time; reapplied in setup for tray and settings window icons.
@@ -66,6 +67,7 @@ fn main() {
             auth::get_update_status,
             auth::get_config,
             auth::set_config,
+            trial::get_trial_status,
             commands::show_settings,
             commands::toggle_overlay,
             commands::quit_app,
@@ -79,21 +81,26 @@ fn main() {
             let open_settings_on_startup = config.behavior.open_settings_on_startup;
             let toggle_hotkey = config.behavior.global_toggle_hotkey.clone();
 
-            // 2. Initialize AuthForgeClient.
-            let client = build_client(app_handle.clone());
+            // 2. Initialize the offline AuthForge client.
+            let client = build_client();
 
             // 3. Build cross-thread SharedState owning both.
-            let shared = Arc::new(SharedState::new(client.clone(), config));
+            let shared = Arc::new(SharedState::new(client, config));
 
             // 4. Tauri-managed AuthState wraps the same Arc — used by the
             //    license / config commands the settings UI invokes.
             app.manage(AuthState::new(shared.clone()));
 
-            if saved_license_key(&app_handle).is_some() {
+            // Trial time must be loaded before the overlay gate first runs.
+            trial::load(&app_handle);
+
+            let has_license_file = auth::license_file_path(&app_handle)
+                .is_ok_and(|p| p.is_file());
+            if has_license_file || auth::saved_license_key(&app_handle).is_some() {
                 shared
                     .startup_auth_pending
                     .store(true, Ordering::SeqCst);
-                emit_auth_status(&app_handle, false, "checking");
+                emit_auth_status(&app_handle, false, "checking", None);
             }
 
             // 5. Build tray icon menu (toggle overlay, settings, quit).
@@ -130,6 +137,17 @@ fn main() {
                 toggle_hotkey.as_deref(),
             );
 
+            // Trial clock: counts while the overlay is enabled and the app is
+            // not licensed (and not while the saved license is being checked).
+            let shared_for_trial = shared.clone();
+            trial::start_ticker(app_handle.clone(), move || {
+                shared_for_trial.overlay_enabled.load(Ordering::Relaxed)
+                    && !shared_for_trial.startup_auth_pending.load(Ordering::SeqCst)
+                    && !auth::is_licensed(&shared_for_trial)
+            });
+
+            version::spawn_update_checker(app_handle.clone());
+
             // 7. Spawn the eframe overlay on a dedicated thread. winit's
             //    event loop runs there independently of Tauri's tao loop
             //    (which keeps the main thread). On Windows each event
@@ -148,16 +166,20 @@ fn main() {
             // 8. Run the controlled startup auth sequence asynchronously
             //    so we don't block setup().
             let app_for_startup = app_handle.clone();
-            let client_for_startup = client.clone();
             let shared_for_startup = shared.clone();
             tauri::async_runtime::spawn(async move {
-                startup_sequence(app_for_startup, client_for_startup, shared_for_startup).await;
+                startup_sequence(app_for_startup, shared_for_startup).await;
             });
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let RunEvent::Exit = event {
+                trial::persist(app);
+            }
+        });
 }
 
 /// Read the persisted config from `tauri-plugin-store`, falling back to
@@ -172,88 +194,46 @@ fn load_config(app: &AppHandle) -> Config {
     serde_json::from_value::<Config>(raw).unwrap_or_default()
 }
 
-/// Returns a normalized license key when one is persisted and long enough.
-fn saved_license_key(app: &AppHandle) -> Option<String> {
-    let saved_raw = app
-        .store(STORE_FILE)
-        .ok()?
-        .get(LICENSE_KEY_STORE_KEY)
-        .and_then(|v| v.as_str().map(|s| s.to_string()))?;
-    let key = auth::normalize_license_key(&saved_raw);
-    if key.len() < 8 {
-        return None;
-    }
-    Some(key)
-}
-
-/// Controlled startup auth sequence: load saved license, attempt login,
-/// emit `auth-status-changed` to the settings window, focus the License
-/// tab on failure. The eframe overlay polls `overlay_license_gate` every
-/// frame (session validity plus deactivate suppression) so we don't need
-/// to "start" listeners here — they're already registered and the gate
-/// does the rest.
-async fn startup_sequence(
-    app: AppHandle,
-    client: Arc<authforge::AuthForgeClient>,
-    shared: Arc<SharedState>,
-) {
-    let finish = |authenticated: bool, reason: &str| {
-        shared
-            .startup_auth_pending
-            .store(false, Ordering::SeqCst);
-        emit_auth_status(&app, authenticated, reason);
+/// Controlled startup licensing (see [`auth::restore_license`]): verify the
+/// license file, else activate from the saved key, else leave the trial in
+/// charge. Emits `auth-status-changed` and opens the License tab when there
+/// is an error to show or nothing (license or trial) left to run on. The
+/// eframe overlay polls `overlay_license_gate` every frame, so we don't
+/// need to "start" listeners here.
+async fn startup_sequence(app: AppHandle, shared: Arc<SharedState>) {
+    let (licensed, reason, error) = match auth::restore_license(&app, &shared) {
+        StartupLicense::Licensed => (true, String::new(), None),
+        StartupLicense::Unlicensed => (false, "no-license".to_string(), None),
+        StartupLicense::Failed(failure) => {
+            let reason = serde_json::to_value(failure.code)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_default();
+            (false, reason, Some(failure))
+        }
     };
 
-    let Some(key) = saved_license_key(&app) else {
-        if app.store(STORE_FILE).ok().and_then(|store| {
-            store
-                .get(LICENSE_KEY_STORE_KEY)
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-        }).is_some()
-        {
-            let _ = auth::clear_persisted_license_key(&app);
-        }
-        finish(false, "no-license");
+    *shared.license_error.lock() = error.clone();
+    shared.startup_auth_pending.store(false, Ordering::SeqCst);
+    let show_license_tab = error.is_some() || (!licensed && !trial::is_trial_active());
+    emit_auth_status(&app, licensed, &reason, error);
+    if show_license_tab {
         focus_license_tab(&app);
-        return;
-    };
-
-    if let Ok(store) = app.store(STORE_FILE) {
-        let saved_raw = store
-            .get(LICENSE_KEY_STORE_KEY)
-            .and_then(|v| v.as_str().map(|s| s.to_string()));
-        if saved_raw.as_deref() != Some(key.as_str()) {
-            store.set(LICENSE_KEY_STORE_KEY, serde_json::Value::String(key.clone()));
-            if let Err(e) = store.save() {
-                eprintln!("[startup] could not persist normalized license key: {e}");
-            }
-        }
-    }
-
-    match client.login(&key) {
-        Ok(result) => {
-            if let Err(e) =
-                auth::ingest_subscription_horizon_after_login_success(&app, &result, &client)
-            {
-                eprintln!("[startup] could not persist license expiry: {e}");
-            }
-            finish(true, "");
-        }
-        Err(err) => {
-            eprintln!("[startup] saved license rejected: {err:?}");
-            let _ = auth::clear_persisted_license_key(&app);
-            finish(false, &format!("{err:?}"));
-            focus_license_tab(&app);
-        }
     }
 }
 
-fn emit_auth_status(app: &AppHandle, authenticated: bool, reason: &str) {
+fn emit_auth_status(
+    app: &AppHandle,
+    authenticated: bool,
+    reason: &str,
+    error: Option<LicenseFailure>,
+) {
     let _ = app.emit(
         "auth-status-changed",
         AuthStatusPayload {
             authenticated,
             reason: reason.to_string(),
+            error,
         },
     );
 }
@@ -264,11 +244,11 @@ fn build_tray(
     tray_icon: Option<Image<'static>>,
 ) -> tauri::Result<()> {
     let toggle_overlay =
-        MenuItem::with_id(app, "toggle-overlay", "Toggle Overlay", true, None::<&str>)?;
+        MenuItem::with_id(app, "toggle-overlay", "Show or hide overlay", true, None::<&str>)?;
     let open_settings =
-        MenuItem::with_id(app, "open-settings", "Settings…", true, None::<&str>)?;
+        MenuItem::with_id(app, "open-settings", "Settings", true, None::<&str>)?;
     let separator = tauri::menu::PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Tapt", true, None::<&str>)?;
 
     let menu = Menu::with_items(app, &[&toggle_overlay, &open_settings, &separator, &quit])?;
 

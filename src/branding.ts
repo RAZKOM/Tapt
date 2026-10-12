@@ -4,13 +4,8 @@ export const PRODUCT_DISPLAY_NAME = "Tapt.";
 /** Word before the accented period lockup (“Tapt” + colored “.”). */
 export const PRODUCT_MARK = "Tapt";
 
-/**
- * AuthForge self-service portal — sign in with license key + purchase email (magic code).
- * Purchases use Stripe checkout URLs in the app (“Buy” buttons); the portal is for help / device resets.
- *
- * @see https://docs.authforge.cc/features/portal
- */
-export const AUTHFORGE_CUSTOMER_PORTAL_URL = "https://portal.authforge.cc";
+/** Support address. Keep in sync with `SUPPORT_EMAIL` in `src-tauri/src/auth.rs`. */
+export const SUPPORT_EMAIL = "hello@razkom.com";
 
-/** Product download page — keep in sync with `src-tauri/src/version.rs` `RELEASES_URL`. */
+/** Product download page. Keep in sync with `RELEASES_URL` in `src-tauri/src/version.rs`. */
 export const RELEASES_URL = "https://razkom.com/tapt/";

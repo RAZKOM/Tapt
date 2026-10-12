@@ -1,26 +1,43 @@
-//! Installed app version (`CARGO_PKG_VERSION`) and update checks against
-//! AuthForge **`app_variables`** (e.g. `version` = latest build on razkom.com/tapt).
+//! Installed app version (`CARGO_PKG_VERSION`) and the update check.
+//!
+//! The latest version is the `tag_name` of the latest published release in
+//! the public releases repo ([`UPDATE_MANIFEST_URL`], `RAZKOM/Tapt.`).
+//! Publishing a release there (not a draft or pre-release) is all it takes
+//! for installed copies to offer the update.
+//!
+//! The fetch is unauthenticated and failure-silent, and runs on its own
+//! thread. It has nothing to do with licensing or the trial: offline
+//! license files freeze AuthForge `app_variables` at activation time, and
+//! trial users have no AuthForge session at all, so `app_variables` can't
+//! carry a "latest version" anymore.
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::Duration;
 
-use authforge::AuthForgeClient;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
+use tauri::{AppHandle, Emitter};
 
 /// Must stay in sync with `Cargo.toml` / `tauri.conf.json` `version`.
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub const RELEASES_URL: &str = "https://razkom.com/tapt/";
 
-const VERSION_KEYS: &[&str] = &[
-    "version",
-    "minVersion",
-    "min_version",
-    "latest_version",
-    "latestVersion",
-    "app_version",
-];
+/// Latest release of the public releases repo (GitHub REST API). Drafts
+/// and pre-releases are excluded by GitHub. Unauthenticated calls allow 60
+/// requests per hour per IP; we make one every [`CHECK_INTERVAL`].
+pub const UPDATE_MANIFEST_URL: &str = "https://api.github.com/repos/RAZKOM/Tapt./releases/latest";
+
+const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Keys read from the response: GitHub's `tag_name` (`v1.0.1`), or a plain
+/// `version` if the source is ever swapped for a static JSON file.
+const VERSION_KEYS: &[&str] = &["tag_name", "version"];
+
+/// Latest version from the last successful check.
+static LATEST_VERSION: Mutex<Option<String>> = Mutex::new(None);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateStatus {
@@ -30,9 +47,13 @@ pub struct UpdateStatus {
     pub releases_url: String,
 }
 
-pub fn update_status_for_client(client: Option<&AuthForgeClient>) -> UpdateStatus {
+pub fn current_status() -> UpdateStatus {
+    let latest = LATEST_VERSION.lock().ok().and_then(|v| v.clone());
+    status_for(latest)
+}
+
+fn status_for(latest_version: Option<String>) -> UpdateStatus {
     let current_version = APP_VERSION.to_string();
-    let latest_version = client.and_then(latest_version_from_client);
     let update_available = latest_version
         .as_deref()
         .is_some_and(|latest| version_cmp(latest, &current_version) == Ordering::Greater);
@@ -45,60 +66,49 @@ pub fn update_status_for_client(client: Option<&AuthForgeClient>) -> UpdateStatu
     }
 }
 
-fn latest_version_from_client(client: &AuthForgeClient) -> Option<String> {
-    if let Some(map) = client.get_app_variables() {
-        if let Some(v) = latest_version_from_var_map(&map) {
-            return Some(v);
-        }
-    }
-
-    // SERVER heartbeats refresh `session_data` but the SDK does not always
-    // mirror `appVariables` into `get_app_variables()` — read both sources.
-    client
-        .get_session_data()
-        .as_ref()
-        .and_then(latest_version_from_session_json)
-}
-
-fn latest_version_from_session_json(session: &Value) -> Option<String> {
-    let app_vars = session
-        .get("appVariables")
-        .or_else(|| session.get("app_variables"));
-    if let Some(vars) = app_vars {
-        if let Value::Object(map) = vars {
-            if let Some(v) = latest_version_from_json_map(map) {
-                return Some(v);
+/// Check now and then every [`CHECK_INTERVAL`]; emit `update-status-changed`
+/// when the known latest version changes.
+pub fn spawn_update_checker(app: AppHandle) {
+    let spawned = std::thread::Builder::new()
+        .name("tapt-update-check".into())
+        .spawn(move || loop {
+            if let Some(latest) = fetch_latest_version() {
+                let changed = match LATEST_VERSION.lock() {
+                    Ok(mut slot) if slot.as_deref() != Some(latest.as_str()) => {
+                        *slot = Some(latest);
+                        true
+                    }
+                    _ => false,
+                };
+                if changed {
+                    let _ = app.emit("update-status-changed", current_status());
+                }
             }
-        }
-    }
-
-    if let Value::Object(map) = session {
-        latest_version_from_json_map(map)
-    } else {
-        None
+            std::thread::sleep(CHECK_INTERVAL);
+        });
+    if let Err(e) = spawned {
+        eprintln!("[update] could not spawn update check: {e}");
     }
 }
 
-fn latest_version_from_json_map(map: &Map<String, Value>) -> Option<String> {
-    for key in VERSION_KEYS {
-        if let Some(v) = map.get(*key) {
-            if let Some(normalized) = version_from_json_value(v) {
-                return Some(normalized);
-            }
-        }
-    }
-    None
+fn fetch_latest_version() -> Option<String> {
+    let response = ureq::get(UPDATE_MANIFEST_URL)
+        .timeout(REQUEST_TIMEOUT)
+        // GitHub rejects API requests without a User-Agent.
+        .set("User-Agent", concat!("Tapt/", env!("CARGO_PKG_VERSION")))
+        .set("Accept", "application/vnd.github+json")
+        .call()
+        .ok()?;
+    let body: Value = response.into_json().ok()?;
+    latest_version_from_manifest(&body)
 }
 
-fn latest_version_from_var_map(map: &HashMap<String, Value>) -> Option<String> {
-    for key in VERSION_KEYS {
-        if let Some(v) = map.get(*key) {
-            if let Some(normalized) = version_from_json_value(v) {
-                return Some(normalized);
-            }
-        }
-    }
-    None
+fn latest_version_from_manifest(manifest: &Value) -> Option<String> {
+    let map = manifest.as_object()?;
+    VERSION_KEYS
+        .iter()
+        .filter_map(|key| map.get(*key))
+        .find_map(version_from_json_value)
 }
 
 fn version_from_json_value(v: &Value) -> Option<String> {
@@ -107,8 +117,7 @@ fn version_from_json_value(v: &Value) -> Option<String> {
         Value::Number(n) => n
             .as_f64()
             .filter(|f| f.is_finite())
-            .map(|f| normalize_version_string(&f.to_string()))
-            .flatten(),
+            .and_then(|f| normalize_version_string(&f.to_string())),
         _ => None,
     }
 }
@@ -158,27 +167,29 @@ mod tests {
     }
 
     #[test]
-    fn reads_version_from_session_app_variables() {
-        let session = serde_json::json!({
-            "sessionToken": "x",
-            "expiresIn": 86400,
-            "appVariables": { "version": "1.0.1" }
-        });
-        assert_eq!(
-            latest_version_from_session_json(&session).as_deref(),
-            Some("1.0.1")
-        );
+    fn reads_version_from_manifest() {
+        let manifest = serde_json::json!({ "version": "1.0.2" });
+        assert_eq!(latest_version_from_manifest(&manifest).as_deref(), Some("1.0.2"));
     }
 
     #[test]
-    fn reads_min_version_key() {
-        let map = HashMap::from([(
-            "minVersion".to_string(),
-            Value::String("2.0.0".into()),
-        )]);
-        assert_eq!(
-            latest_version_from_var_map(&map).as_deref(),
-            Some("2.0.0")
-        );
+    fn reads_github_release_tag() {
+        let release = serde_json::json!({ "tag_name": "v2.1.0", "draft": false });
+        assert_eq!(latest_version_from_manifest(&release).as_deref(), Some("2.1.0"));
+    }
+
+    /// Hits the real GitHub API: `cargo test -- --ignored live_latest_release`.
+    #[test]
+    #[ignore]
+    fn live_latest_release() {
+        let latest = fetch_latest_version().expect("latest release readable");
+        assert!(parse_version_parts(&latest).is_some(), "{latest}");
+    }
+
+    #[test]
+    fn missing_or_bad_manifest_is_silent() {
+        assert_eq!(latest_version_from_manifest(&serde_json::json!([])), None);
+        assert_eq!(latest_version_from_manifest(&serde_json::json!({ "version": "" })), None);
+        assert!(!status_for(None).update_available);
     }
 }

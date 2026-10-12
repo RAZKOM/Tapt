@@ -14,12 +14,8 @@ export default function UpdateBanner({ status }: UpdateBannerProps) {
   return (
     <div className="kv-update-banner" role="status">
       <div className="kv-update-banner__text">
-        <strong>Update available</strong>
-        <span>
-          {" "}
-          v{status.latest_version} is available (you have v
-          {status.current_version}).
-        </span>
+        <strong>Tapt {status.latest_version} is available.</strong>
+        <span> You have {status.current_version}.</span>
       </div>
       <button
         type="button"

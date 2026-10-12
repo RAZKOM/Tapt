@@ -89,14 +89,14 @@ export default function OverlayModeSwitcher({ className }: Props) {
     <div
       className={["kv-overlay-mode", className ?? ""].filter(Boolean).join(" ")}
       role="radiogroup"
-      aria-label="Overlay display mode"
+      aria-label="Overlay mode"
     >
       <button
         type="button"
         role="radio"
         aria-checked={mode === "key-feed"}
         className={`kv-overlay-mode__seg ${mode === "key-feed" ? "kv-overlay-mode__seg--on" : ""}`}
-        title="Key feed — animated pills"
+        title="Key feed"
         onClick={() => commit("key-feed")}
       >
         <IconKeyFeed />
@@ -106,7 +106,7 @@ export default function OverlayModeSwitcher({ className }: Props) {
         role="radio"
         aria-checked={mode === "keyboard-overlay"}
         className={`kv-overlay-mode__seg ${mode === "keyboard-overlay" ? "kv-overlay-mode__seg--on" : ""}`}
-        title="Keyboard overlay — on-screen layout"
+        title="Keyboard"
         onClick={() => commit("keyboard-overlay")}
       >
         <IconKeyboardOverlay />

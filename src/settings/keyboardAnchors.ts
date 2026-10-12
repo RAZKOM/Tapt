@@ -10,5 +10,5 @@ export const KEYBOARD_ANCHORS: { value: KeyboardAnchor; label: string }[] = [
   { value: "bottom-left", label: "Bottom left" },
   { value: "bottom-center", label: "Bottom center" },
   { value: "bottom-right", label: "Bottom right" },
-  { value: "free", label: "Free (offset from screen top-left)" },
+  { value: "free", label: "Custom" },
 ];

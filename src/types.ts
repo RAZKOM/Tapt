@@ -2,16 +2,22 @@
 // fully typed. Keep these in lockstep with the Rust definitions.
 
 export interface AuthStatusPayload {
+  /** A real license (verified offline license file). The free trial is separate: see `TrialStatus`. */
   authenticated: boolean;
   reason: string;
+  /** Why activating the saved key at startup failed, for the License tab. */
+  error: LicenseFailure | null;
 }
 
-export type LicenseType = "monthly" | "lifetime" | "trial" | "unknown";
+/** Mirrors `src-tauri/src/trial.rs` `TrialStatus` (`trial-status-changed` event, `get_trial_status`). */
+export interface TrialStatus {
+  remaining_secs: number;
+  total_secs: number;
+  active: boolean;
+}
 
+/** Present while licensed. Every license is a lifetime license activated offline. */
 export interface LicenseInfo {
-  license_type: LicenseType;
-  /** UNIX seconds for expiry UI: `license_variables` / `app_variables` (if set), else signed payload `licenseExpiresAt`, else persisted ceiling. Session `expiresIn` is excluded. */
-  subscription_period_end_unix: number | null;
   hwid_masked: string;
 }
 
@@ -22,12 +28,26 @@ export interface KeyEvent {
   timestamp: number;
 }
 
+/** Mirrors `LicenseError` in `src-tauri/src/auth.rs`. */
 export type LicenseErrorCode =
+  | "invalid_app"
   | "invalid_key"
   | "expired"
   | "revoked"
   | "hwid_mismatch"
+  | "offline_activation_limit_reached"
+  | "offline_activation_unavailable"
+  | "offline_file_rejected"
+  | "file_write_failed"
+  | "no_credits"
+  | "app_burn_cap_reached"
+  | "blocked"
   | "rate_limited"
+  | "replay_detected"
+  | "app_disabled"
+  | "bad_request"
+  | "system_error"
+  | "signature_mismatch"
   | "network"
   | "storage"
   | "other";
@@ -38,12 +58,10 @@ export interface LicenseFailure {
 }
 
 export interface PurchaseUrls {
-  monthly: string;
   lifetime: string;
-  authforge_app_id: string;
 }
 
-/** Mirrors `src-tauri/src/version.rs` — installed vs AuthForge `app_variables.version`. */
+/** Mirrors `src-tauri/src/version.rs` — installed vs the latest `RAZKOM/Tapt.` GitHub release. */
 export interface UpdateStatus {
   current_version: string;
   latest_version: string | null;

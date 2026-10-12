@@ -294,9 +294,9 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "authforge"
-version = "1.0.6"
+version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "699caf76b8acf904a3d1cdf94cad1872c8e94bf31d2770e2340c782b5fcb4bb6"
+checksum = "f9d3baceaacc1743c3e112a22853455007ce6592ed5d6b8158d2c0d61f92fb16"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
@@ -4919,7 +4919,7 @@ dependencies = [
 
 [[package]]
 name = "tapt"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "authforge",
  "crossbeam-channel",
@@ -4941,8 +4941,8 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-single-instance",
  "tauri-plugin-store",
- "time",
  "tokio",
+ "ureq",
  "windows-sys 0.59.0",
  "winit",
 ]

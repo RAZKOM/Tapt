@@ -4,7 +4,7 @@ Windows desktop overlay that displays keyboard input in real time. Built with **
 
 Designed for screencasters, streamers, tutorial makers, and live presenters who want their audience to see what keys they are pressing.
 
-> Commercial product: **one-time** 1‑month license ($2.99) or lifetime license ($9.99). All functionality is gated behind license validation via the AuthForge SDK.
+> Commercial product: **one hour of free trial** built in, then a **one-time lifetime license ($2.99)**. Licenses are activated offline once per PC through the AuthForge SDK; after that Tapt never needs the network to stay licensed.
 
 ---
 
@@ -14,7 +14,7 @@ Designed for screencasters, streamers, tutorial makers, and live presenters who 
 - **Transparent, click-through, always-on-top** overlay window
 - **Visible to OBS / screen capture** on Windows
 - **Tray-icon controlled** — no Taskbar entry for the overlay
-- **License-gated** — Silent Gate drops keyboard events for the overlay when the session is not authenticated (`rdev`; keys never reach the native overlay renderer)
+- **License-gated** — Silent Gate drops keyboard events for the overlay unless the PC is licensed or free-trial time remains (`rdev`; keys never reach the native overlay renderer)
 - **Hardened binary** — `cryptify::encrypt_string!` for secrets, full LTO, stripped, `panic = "abort"`, `#[inline(always)]` auth checks, self-ban tamper response
 
 ## Project layout
@@ -42,7 +42,10 @@ Designed for screencasters, streamers, tutorial makers, and live presenters who 
 │   └── src/
 │       ├── main.rs           # Tray, IPC commands, wires listener → overlay channel
 │       ├── lib.rs            # Shared serde types crossing the IPC boundary
-│       ├── auth.rs           # AuthForge + license Tauri commands
+│       ├── auth.rs           # AuthForge offline activation + license Tauri commands
+│       ├── trial.rs          # Built-in one-hour free trial (all trial logic)
+│       ├── version.rs        # Update check (latest RAZKOM/Tapt. GitHub release)
+│       ├── win_registry.rs   # MachineGuid (HWID) + HKCU trial value
 │       ├── config.rs         # Persistent config store
 │       ├── listener.rs       # Single `rdev::listen` dispatch thread (process-wide)
 │       ├── keylistener.rs    # Registers key handler + Silent Gate
@@ -81,7 +84,7 @@ cd ..
 npm run tauri dev
 ```
 
-In debug builds an **empty `.env`** is acceptable for compilation. The real AuthForge SDK rejects every key with `InvalidApp` until you populate `AUTHFORGE_APP_ID`, `AUTHFORGE_APP_SECRET`, and `AUTHFORGE_PUBLIC_KEY` in `src-tauri/.env`, but the rest of the app (windows, settings, frontend) is fully runnable. Set `STRIPE_*` to test the License tab "Buy" buttons.
+In debug builds an **empty `.env`** is acceptable for compilation. The real AuthForge SDK rejects every key with `InvalidApp` until you populate `AUTHFORGE_APP_ID`, `AUTHFORGE_APP_SECRET`, and `AUTHFORGE_PUBLIC_KEY` in `src-tauri/.env`, but the rest of the app (windows, settings, frontend) is fully runnable. Set `STRIPE_LIFETIME_URL` to test the License tab "Buy lifetime" button.
 
 ## Icons
 
@@ -99,7 +102,7 @@ npm run icons:generate -- "C:/path/to/your-square-icon.png"
 npm run tauri build
 ```
 
-A release build **requires** all `AUTHFORGE_*` and `STRIPE_*` values in `src-tauri/.env` (or in the environment). `build.rs` will fail loudly if any are missing.
+A release build **requires** all `AUTHFORGE_*` values and `STRIPE_LIFETIME_URL` in `src-tauri/.env` (or in the environment). `build.rs` will fail loudly if any are missing.
 
 ### Verifying secret encryption
 
@@ -114,48 +117,28 @@ There must be no recognizable AuthForge URL, app id, or key fragments. Everythin
 
 ## AuthForge integration
 
-We use the real `authforge` crate from crates.io (version pinned in [`src-tauri/Cargo.toml`](src-tauri/Cargo.toml)). The integration is in [`src-tauri/src/auth.rs`](src-tauri/src/auth.rs):
+We use the real `authforge` crate from crates.io (version pinned in [`src-tauri/Cargo.toml`](src-tauri/Cargo.toml)). The integration is in [`src-tauri/src/auth.rs`](src-tauri/src/auth.rs) and uses AuthForge **self-serve offline activation**:
 
-- Construct an `AuthForgeClient` once at startup with `HeartbeatMode::Server` and a 900s interval (~3-4 credits/day per active user).
-- Pass a locally-computed HWID via `AuthForgeConfig::hwid_override` so what we display in the License tab is exactly what the SDK sends to `/auth/validate`. The HWID is `SHA-256(hostname | username | os)` and the License tab shows the masked form `••••XXXX`.
-- The `on_failure` callback emits `auth-status-changed { authenticated: false, reason }` so the native overlay stops rendering and the settings window can navigate to the License tab.
+- **Activate** calls `activate_offline(key, path)` once. AuthForge returns a signed, lifetime `.authforge` file bound to this PC's HWID; the SDK verifies it and writes it to `%APPDATA%\com.razkom.tapt\license.authforge` (the app data dir, never the install dir). The key is also kept in the plugin store so a deleted file or a reinstall re-activates silently. The same PC re-activating is free and gets the identical file back.
+- **Every launch** verifies that file locally with `login_from_file`: no network, no heartbeat. If the file is missing or invalid and a key is saved, Tapt calls `activate_offline` once with the saved key.
+- **Only perpetual licenses** can be activated. A key with an expiry gets `offline_activation_requires_perpetual` and the License tab shows "Activation isn't available for this license." There is no online login and no heartbeat anywhere in the app.
+- **HWID** is `SHA-256("tapt|" + MachineGuid)` from `HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid`, passed via `AuthForgeConfig::hwid_override`, so what the License tab shows (masked `••••XXXX`) is exactly what the server binds. Every new HWID uses one of the license's machine slots for good, so do not change this scheme. If the registry can't be read, Tapt falls back to the old `SHA-256(hostname | username | os)` and logs it.
+- **Remove license from this PC** deletes the file and the saved key. It does not free an activation slot; re-activating the same PC later is free.
+- **No customer portal.** Portal HWID resets free seats but never machine slots, and an issued file keeps working regardless, so the portal can't help offline-licensed buyers. Support is by email at **hello@razkom.com** (`SUPPORT_EMAIL` in `auth.rs` and `branding.ts`; activation errors that need help name it, and the License tab links it). Moving a license to new hardware is a support task: release the old machine (or raise the license's HWID slots) in the AuthForge dashboard.
 
-### License classification
+### Free trial
 
-The SDK doesn't categorize licenses itself — it returns a generic `LoginResult { session_token, expires_in, app_variables, license_variables, request_id }`. We classify each license by reading `license_variables` and matching the value of one of these keys (preferred order):
-
-1. `type`
-2. `plan`
-3. `tier`
-
-Recognized values (case-insensitive):
-
-| Server value                         | UI shows               |
-| ------------------------------------ | ---------------------- |
-| `monthly` / `subscription` / `subscription_monthly` | "1-month license" (UI label; AuthForge may still use `subscription*` values — pricing here is a **one-time purchase**, not recurring billing) |
-| `lifetime` / `perpetual`             | "Lifetime"             |
-| `trial`                              | "Trial"                |
-| anything else / missing              | "Active"               |
-
-Configure these on the licensing server when issuing keys.
-
-### License expiry countdown
-
-The signed payload (base64 inside the HTTP `payload` field) includes **`expiresIn`** for the **session JWT** and, when your validate endpoint provides it, **`licenseExpiresAt`** as an ISO‑8601 string (or JSON `null` for lifetime). The app reads **`licenseExpiresAt`** from the SDK’s stored session JSON for the License tab countdown; it does **not** treat rolling session `expiresIn` as license end time.
-
-You can also place an end time in **`license_variables`** (e.g. `expiresAt` per [AuthForge variables](https://docs.authforge.cc/llms-full.txt)); map keys take precedence over `licenseExpiresAt` when both are set.
-
-If **`licenseExpiresAt` is absent** from the JSON the SDK stores between heartbeats, expiry copy falls back to the persisted ceiling until the next successful login. Prefer including the same top-level license fields on **`/auth/heartbeat`** success payloads whenever possible.
+[`src-tauri/src/trial.rs`](src-tauri/src/trial.rs) gives every PC **one hour of cumulative use**: time Tapt runs with the overlay enabled while unlicensed, measured with a monotonic clock so changing the system time has no effect. Used seconds are saved every ~30 s and on exit, both in the plugin store and in `HKCU\Software\Razkom\Tapt\TrialUsedSeconds`; on load the larger value wins. The overlay works while licensed **or** while trial time remains; at zero it stops and the License tab opens.
 
 ### App version and updates
 
-The installed build version comes from **`src-tauri/Cargo.toml`** / **`tauri.conf.json`** (`CARGO_PKG_VERSION` at compile time). Bump both when you cut a release.
+The installed build version comes from **`src-tauri/Cargo.toml`** (`CARGO_PKG_VERSION` at compile time). Bump it together with `src-tauri/tauri.conf.json` and `package.json` when you cut a release.
 
-Set AuthForge **`app_variables.version`** to the latest shipped build (e.g. `1.0.1` or `v1.0.1`). After login, the settings UI compares that value to the running build; when the server version is newer, a banner offers **Download** (opens [razkom.com/tapt](https://razkom.com/tapt/)). The License tab footer always shows the installed version.
+The latest version is the tag of the latest published release in the public releases repo, [RAZKOM/Tapt.](https://github.com/RAZKOM/Tapt./releases) (tags like `v1.0.2`). Tapt reads it from the GitHub API (`/repos/RAZKOM/Tapt./releases/latest`) unauthenticated, at startup and every 6 hours, silently ignoring any failure, independent of the license and the trial. Drafts and pre-releases don't count, so a release only reaches users once it is published. When it is newer than the running build, a banner offers **Download** (opens [razkom.com/tapt](https://razkom.com/tapt/)). The License tab footer always shows the installed version. AuthForge `app_variables` are no longer used for this: offline license files freeze them at activation time.
 
 ### Error mapping
 
-All 18 `AuthForgeError` variants are mapped to user-facing strings in `error_to_message`. The frontend receives both a stable `code` (snake_case) and the localized `message` so the License tab can branch on the code while displaying the message.
+`error_to_message` maps every `AuthForgeError` code, including the offline-activation codes that arrive as `AuthForgeError::Other(code)`, to a user-facing string. The frontend receives both a stable `code` (snake_case) and the `message`. Activation errors never exit or log the user out: the message is shown and the user can retry.
 
 ## Required permissions
 

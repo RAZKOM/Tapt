@@ -1,55 +1,68 @@
-//! License lifecycle: AuthForge client wrapper, cryptified Stripe URLs,
+//! License lifecycle: the AuthForge client, the cryptified Stripe URL,
 //! and the Tauri commands the License tab calls.
+//!
+//! ## Licensing model
+//!
+//! Every license is a perpetual license activated **offline, once**:
+//! [`activate_license`] calls `activate_offline`, which exchanges the key
+//! for a signed, lifetime `.authforge` file bound to this PC's HWID and
+//! writes it to `<app data>/license.authforge`. Every later launch verifies
+//! that file locally with `login_from_file`, with no network
+//! ([`restore_license`]). There is no online login and no heartbeat.
 //!
 //! ## Hardening notes
 //!
-//! All five sensitive strings (the three AuthForge credentials plus
-//! the two Stripe checkout URLs) are wrapped in
-//! `cryptify::encrypt_string!` so they never appear contiguously in
-//! the binary's `.rdata` / `.rodata` sections. Decryption happens at
-//! the call site and the plaintext lives only on the stack for the
-//! duration of one operation.
+//! All four sensitive strings (the three AuthForge credentials plus
+//! the Stripe checkout URL) are wrapped in `cryptify::encrypt_string!`
+//! so they never appear contiguously in the binary's `.rdata` /
+//! `.rodata` sections. Decryption happens at the call site and the
+//! plaintext lives only on the stack for the duration of one operation.
 //!
-//! [`is_session_valid`] is marked `#[inline(always)]` so the gate
-//! disappears into the listener loop bodies — a binary patcher cannot
-//! NOP a single `call` instruction to bypass it.
+//! [`is_session_valid`], [`is_licensed`] and [`overlay_license_gate`] are
+//! marked `#[inline(always)]` so the gate disappears into the listener
+//! loop bodies — a binary patcher cannot NOP a single `call` instruction
+//! to bypass it.
 //!
 //! ## HWID handling
 //!
-//! The real `authforge` SDK does not expose its internally-generated
-//! HWID. Instead we compute a stable per-host fingerprint locally and
-//! pass it to the SDK via `AuthForgeConfig::hwid_override`, then keep
-//! a copy for display. The SDK validates the override against the
-//! same `/auth/validate` server, so what we display is exactly what
-//! the server sees.
+//! The HWID is `SHA-256("tapt|" + MachineGuid)`, passed to the SDK via
+//! `AuthForgeConfig::hwid_override` so what we display is exactly what the
+//! server binds. Offline files only verify on the HWID they were issued
+//! for, and every new HWID uses one of the license's machine slots for
+//! good, so this value must stay stable: do not change the scheme.
 
-use std::collections::HashMap;
-use std::sync::atomic::Ordering;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-use authforge::{
-    AuthForgeClient, AuthForgeConfig, AuthForgeError, HeartbeatMode, LoginResult,
-};
+use authforge::{AuthForgeClient, AuthForgeConfig, AuthForgeError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_store::StoreExt;
 
 use crate::config::{Config, CONFIG_STORE_KEY, STORE_FILE};
-use crate::{mask_hwid, AuthStatusPayload, LicenseInfo, LicenseType, SharedState, UpdateStatus};
+use crate::{mask_hwid, AuthStatusPayload, LicenseInfo, SharedState, UpdateStatus};
 
 include!(concat!(env!("OUT_DIR"), "/secrets.rs"));
 
-/// Persisted store key for the active license string.
+/// Persisted store key for the active license string. Kept after offline
+/// activation: it is what makes re-activation after a deleted file or a
+/// reinstall silent (same PC re-activating is free).
 pub const LICENSE_KEY_STORE_KEY: &str = "license_key";
 
-/// Best-known license end instant from `/auth/validate` (never rolling heartbeat TTL).
-///
-/// Live [`AuthForgeClient::get_session_data`] `expiresIn` resets to ~24h on `/auth/heartbeat`;
-/// expiry UI uses this ceiling merged with explicit license variables instead.
-pub const LICENSE_SUBSCRIPTION_CEILING_UNIX_KEY: &str = "license_subscription_period_ceiling_unix";
+/// File name of the signed offline license inside the app data directory.
+pub const LICENSE_FILE_NAME: &str = "license.authforge";
+
+/// `<app data dir>/license.authforge` (`%APPDATA%\com.razkom.tapt\`).
+/// Never the install directory.
+pub fn license_file_path(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join(LICENSE_FILE_NAME))
+        .map_err(|e| e.to_string())
+}
 
 /// Match the settings UI: uppercase, strip whitespace, keep `A-Z0-9-` only.
 pub fn normalize_license_key(key: &str) -> String {
@@ -69,11 +82,32 @@ pub fn normalize_license_key(key: &str) -> String {
 pub fn clear_persisted_license_key(app: &AppHandle) -> Result<(), String> {
     let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
     store.delete(LICENSE_KEY_STORE_KEY);
-    store.delete(LICENSE_SUBSCRIPTION_CEILING_UNIX_KEY);
     store
         .save()
         .map_err(|e| format!("Could not save store after clearing license key: {e}"))?;
     Ok(())
+}
+
+/// Returns a normalized license key when one is persisted and long enough.
+pub fn saved_license_key(app: &AppHandle) -> Option<String> {
+    let key = normalize_license_key(&saved_license_key_raw(app)?);
+    if key.len() < 8 {
+        return None;
+    }
+    Some(key)
+}
+
+fn saved_license_key_raw(app: &AppHandle) -> Option<String> {
+    app.store(STORE_FILE)
+        .ok()?
+        .get(LICENSE_KEY_STORE_KEY)
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+}
+
+fn save_license_key(app: &AppHandle, key: &str) -> Result<(), String> {
+    let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
+    store.set(LICENSE_KEY_STORE_KEY, Value::String(key.to_string()));
+    store.save().map_err(|e| e.to_string())
 }
 
 /// The HWID we compute locally and feed into the SDK via
@@ -99,142 +133,120 @@ impl AuthState {
     pub fn shared(&self) -> &Arc<SharedState> {
         &self.0
     }
-
-    pub fn client(&self) -> &Arc<AuthForgeClient> {
-        &self.0.auth
-    }
 }
 
-/// The licensing gate. Inlined into `keylistener`
-/// so it cannot be NOP'd as a single call site.
+/// The client's licensing check. Inlined into every gate.
 #[inline(always)]
 pub fn is_session_valid(client: &AuthForgeClient) -> bool {
     client.is_authenticated()
 }
 
-/// Overlay + IPC gate: respects [`SharedState::auth_ui_suppressed`] so the UI can
-/// flip to logged-out before `AuthForgeClient::logout` finishes joining the
-/// heartbeat thread.
+/// Licensed by a verified offline license file.
 #[inline(always)]
-pub fn overlay_license_gate(shared: &SharedState) -> bool {
-    if shared.auth_ui_suppressed.load(Ordering::Relaxed) {
-        return false;
-    }
+pub fn is_licensed(shared: &SharedState) -> bool {
     is_session_valid(&shared.auth)
 }
 
-/// Build the AuthForge client with cryptified secrets. Called once
-/// from `main.rs` at startup. The closure passed as `on_failure`
-/// emits `auth-status-changed` so the frontend can react.
-pub fn build_client(app_handle: AppHandle) -> Arc<AuthForgeClient> {
-    let app_id = authforge_app_id();
-    let app_secret = authforge_app_secret();
-    let public_key = authforge_public_key();
+/// Overlay + key listener gate: licensed, or free-trial time left.
+#[inline(always)]
+pub fn overlay_license_gate(shared: &SharedState) -> bool {
+    is_licensed(shared) || crate::trial::is_trial_active()
+}
 
-    let handle_for_cb = app_handle.clone();
-    // `..Default::default()` is preserved here on purpose so the call
-    // site remains resilient against future fields added to
-    // `AuthForgeConfig` by the upstream SDK.
-    #[allow(clippy::needless_update)]
-    let client = AuthForgeClient::new(AuthForgeConfig {
-        app_id,
-        app_secret,
-        public_key,
-        heartbeat_mode: HeartbeatMode::Server,
-        heartbeat_interval: 900,
+/// Offline client: `activate_offline` + `login_from_file`. No heartbeat;
+/// nothing touches the network after activation.
+pub fn build_client() -> Arc<AuthForgeClient> {
+    Arc::new(AuthForgeClient::new(AuthForgeConfig {
+        app_id: authforge_app_id(),
+        app_secret: authforge_app_secret(),
+        public_key: authforge_public_key(),
         hwid_override: Some(local_hwid().to_string()),
-        on_failure: Some(Box::new(move |reason: &str| {
-            eprintln!("[authforge] heartbeat failure: {reason}");
-            handle_for_cb
-                .emit(
-                    "auth-status-changed",
-                    AuthStatusPayload {
-                        authenticated: false,
-                        reason: reason.to_string(),
-                    },
-                )
-                .ok();
+        // `login_from_file` reports a missing or bad file here as
+        // `offline_login_failed: <code>`. That only means "activate from
+        // the saved key or use the trial", never an error or a logout.
+        on_failure: Some(Box::new(|reason: &str| {
+            eprintln!("[authforge] {reason}");
         })),
         ..Default::default()
-    });
-    Arc::new(client)
+    }))
 }
 
-/// Cryptified Stripe URLs. Call sites decrypt at the moment of use.
-pub fn purchase_monthly_url() -> String {
-    stripe_monthly_url()
-}
-
+/// Cryptified Stripe URL. Decrypted at the moment of use.
 pub fn purchase_lifetime_url() -> String {
     stripe_lifetime_url()
 }
 
-/// User-facing mapping from `AuthForgeError` to the strings the
-/// License tab displays.
-pub fn error_to_message(err: &AuthForgeError) -> &'static str {
-    match err {
-        AuthForgeError::InvalidApp => {
-            "App credentials are invalid. Please reinstall."
+const MSG_UNREACHABLE: &str = "Couldn't reach the activation server. Try again.";
+
+/// Where buyers get help. The settings UI turns this address into a mailto
+/// link wherever it appears in a message; keep it in sync with
+/// `SUPPORT_EMAIL` in `src/branding.ts`.
+pub const SUPPORT_EMAIL: &str = "hello@razkom.com";
+
+/// User-facing message for an activation error. Keyed on `err.code()`
+/// because the offline-activation codes arrive as
+/// `AuthForgeError::Other(code)`.
+pub fn error_to_message(err: &AuthForgeError) -> String {
+    let code = err.code();
+    let msg = match code {
+        "invalid_key" => "License key not found. Check for typos.",
+        "revoked" | "expired" => "This license is no longer valid.",
+        "offline_activation_limit_reached" => {
+            "This key has been activated on the maximum number of PCs. \
+             Email hello@razkom.com for help."
         }
-        AuthForgeError::InvalidKey => "License key not found. Check for typos.",
-        AuthForgeError::Expired => "This license has expired. Please renew.",
-        AuthForgeError::Revoked => "This license has been revoked.",
-        AuthForgeError::HwidMismatch => {
-            "This key is already activated on another device."
+        "hwid_mismatch" => {
+            "No free activation slot for this PC. Email hello@razkom.com for help."
         }
-        AuthForgeError::NoCredits => {
-            "License has no remaining activations. Please contact support."
+        "offline_activation_disabled"
+        | "offline_activation_requires_seats"
+        | "offline_activation_requires_perpetual" => {
+            "Activation isn't available for this license. Email hello@razkom.com for help."
         }
-        AuthForgeError::AppBurnCapReached => {
-            "Activation limit reached. Please try again later."
+        "no_credits" | "app_burn_cap_reached" | "rate_limited" | "system_error"
+        | "network_error" | "timeout" | "invalid_json_response" | "unexpected_response" => {
+            MSG_UNREACHABLE
         }
-        AuthForgeError::Blocked => "This account or device is blocked.",
-        AuthForgeError::RateLimited => {
-            "Too many attempts. Please wait a moment and try again."
+        c if c.starts_with("http_error_") => MSG_UNREACHABLE,
+        "offline_file_rejected" => "Activation failed. Email hello@razkom.com for help.",
+        "file_write_failed" => {
+            let full = err.to_string();
+            let reason = full.split_once(':').map_or(full.as_str(), |(_, r)| r.trim());
+            return format!("Couldn't save the license file: {reason}");
         }
-        AuthForgeError::ReplayDetected => {
-            "Security check failed (replay detected). Please retry."
+        "invalid_app" => "This copy of Tapt can't activate licenses. Reinstall it from razkom.com/tapt.",
+        "blocked" => "This PC can't activate Tapt. Email hello@razkom.com for help.",
+        "app_disabled" => {
+            "Activation isn't available right now. Email hello@razkom.com for help."
         }
-        AuthForgeError::AppDisabled => "This application has been disabled.",
-        AuthForgeError::SessionExpired => {
-            "Your session has expired. Please activate again."
-        }
-        AuthForgeError::RevokeRequiresSession => {
-            "An active session is required to revoke this license."
-        }
-        AuthForgeError::BadRequest => {
-            "License server rejected the request. Please retry."
-        }
-        AuthForgeError::SystemError => {
-            "License server is temporarily unavailable. Please retry."
-        }
-        AuthForgeError::SignatureMismatch => {
-            "Server response failed signature verification."
-        }
-        AuthForgeError::NetworkError(_) => {
-            "Could not reach the license server. Check your internet connection."
-        }
-        AuthForgeError::Other(_) => "An unexpected licensing error occurred.",
-    }
+        "replay_detected" | "bad_request" | "signature_mismatch" => "Activation failed. Try again.",
+        _ => "Activation failed. Try again, or email hello@razkom.com if it keeps happening.",
+    };
+    msg.to_string()
 }
 
 /// Stable JSON-serializable error code the frontend can branch on.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LicenseError {
     InvalidApp,
     InvalidKey,
     Expired,
     Revoked,
+    /// No free activation slot for this PC.
     HwidMismatch,
+    /// Every machine slot on the license is used (support only).
+    OfflineActivationLimitReached,
+    /// Disabled for the app, unlimited-seat or non-perpetual license.
+    OfflineActivationUnavailable,
+    OfflineFileRejected,
+    FileWriteFailed,
     NoCredits,
     AppBurnCapReached,
     Blocked,
     RateLimited,
     ReplayDetected,
     AppDisabled,
-    SessionExpired,
-    RevokeRequiresSession,
     BadRequest,
     SystemError,
     SignatureMismatch,
@@ -245,25 +257,32 @@ pub enum LicenseError {
 
 impl From<&AuthForgeError> for LicenseError {
     fn from(err: &AuthForgeError) -> Self {
-        match err {
-            AuthForgeError::InvalidApp => Self::InvalidApp,
-            AuthForgeError::InvalidKey => Self::InvalidKey,
-            AuthForgeError::Expired => Self::Expired,
-            AuthForgeError::Revoked => Self::Revoked,
-            AuthForgeError::HwidMismatch => Self::HwidMismatch,
-            AuthForgeError::NoCredits => Self::NoCredits,
-            AuthForgeError::AppBurnCapReached => Self::AppBurnCapReached,
-            AuthForgeError::Blocked => Self::Blocked,
-            AuthForgeError::RateLimited => Self::RateLimited,
-            AuthForgeError::ReplayDetected => Self::ReplayDetected,
-            AuthForgeError::AppDisabled => Self::AppDisabled,
-            AuthForgeError::SessionExpired => Self::SessionExpired,
-            AuthForgeError::RevokeRequiresSession => Self::RevokeRequiresSession,
-            AuthForgeError::BadRequest => Self::BadRequest,
-            AuthForgeError::SystemError => Self::SystemError,
-            AuthForgeError::SignatureMismatch => Self::SignatureMismatch,
-            AuthForgeError::NetworkError(_) => Self::Network,
-            AuthForgeError::Other(_) => Self::Other,
+        match err.code() {
+            "invalid_app" => Self::InvalidApp,
+            "invalid_key" => Self::InvalidKey,
+            "expired" => Self::Expired,
+            "revoked" => Self::Revoked,
+            "hwid_mismatch" => Self::HwidMismatch,
+            "offline_activation_limit_reached" => Self::OfflineActivationLimitReached,
+            "offline_activation_disabled"
+            | "offline_activation_requires_seats"
+            | "offline_activation_requires_perpetual" => Self::OfflineActivationUnavailable,
+            "offline_file_rejected" => Self::OfflineFileRejected,
+            "file_write_failed" => Self::FileWriteFailed,
+            "no_credits" => Self::NoCredits,
+            "app_burn_cap_reached" => Self::AppBurnCapReached,
+            "blocked" => Self::Blocked,
+            "rate_limited" => Self::RateLimited,
+            "replay_detected" => Self::ReplayDetected,
+            "app_disabled" => Self::AppDisabled,
+            "bad_request" => Self::BadRequest,
+            "system_error" => Self::SystemError,
+            "signature_mismatch" => Self::SignatureMismatch,
+            "network_error" | "timeout" | "invalid_json_response" | "unexpected_response" => {
+                Self::Network
+            }
+            c if c.starts_with("http_error_") => Self::Network,
+            _ => Self::Other,
         }
     }
 }
@@ -271,7 +290,7 @@ impl From<&AuthForgeError> for LicenseError {
 /// Combined error envelope used as the `Err` payload for license
 /// commands. Frontend reads `code` for branching, `message` for
 /// display.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LicenseFailure {
     pub code: LicenseError,
     pub message: String,
@@ -281,211 +300,102 @@ impl From<AuthForgeError> for LicenseFailure {
     fn from(err: AuthForgeError) -> Self {
         Self {
             code: (&err).into(),
-            message: error_to_message(&err).to_string(),
+            message: error_to_message(&err),
         }
     }
 }
 
-/// Derive the `LicenseType` from server-supplied `license_variables`.
-/// Convention: the licensing server sets a `"type"` (preferred) or
-/// `"plan"` field on each license to one of `monthly` / `lifetime` /
-/// `trial`. If neither is present we fall back to `Unknown`.
-fn classify(license_variables: Option<&HashMap<String, Value>>) -> LicenseType {
-    let Some(map) = license_variables else {
-        return LicenseType::Unknown;
+impl LicenseFailure {
+    fn storage(message: String) -> Self {
+        Self {
+            code: LicenseError::Storage,
+            message,
+        }
+    }
+}
+
+/// Log an activation error. The full `Display` form carries the detail
+/// support needs (for example `offline_file_rejected: wrong_app`, which
+/// usually means a wrong AUTHFORGE_PUBLIC_KEY or app id in the build).
+fn log_activation_error(context: &str, err: &AuthForgeError) {
+    eprintln!("[license] {context} failed (code {}): {err}", err.code());
+}
+
+/// The key itself is dead: forget it so we stop retrying it every launch.
+/// Everything else (network, no free slot, ...) keeps it for a silent retry.
+fn is_dead_key(err: &AuthForgeError) -> bool {
+    matches!(err.code(), "invalid_key" | "revoked" | "expired")
+}
+
+/// Result of [`restore_license`] at startup.
+pub enum StartupLicense {
+    Licensed,
+    /// No file and no saved key: the trial applies.
+    Unlicensed,
+    /// A saved key could not be activated; show this on the License tab.
+    Failed(LicenseFailure),
+}
+
+/// Startup licensing, in order:
+/// 1. A valid `license.authforge` file: licensed, no network.
+/// 2. A saved key (the file was deleted, or the app reinstalled):
+///    `activate_offline` once. The same PC gets its file back for free.
+/// 3. Otherwise unlicensed; the trial applies.
+pub fn restore_license(app: &AppHandle, shared: &SharedState) -> StartupLicense {
+    let _auth_transition = shared.auth_transition_lock.lock();
+
+    let path = match license_file_path(app) {
+        Ok(path) => Some(path),
+        Err(e) => {
+            eprintln!("[license] no app data dir: {e}");
+            None
+        }
     };
-    let raw = map
-        .get("type")
-        .or_else(|| map.get("plan"))
-        .or_else(|| map.get("tier"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    match raw.to_ascii_lowercase().as_str() {
-        "monthly" | "subscription" | "subscription_monthly" => LicenseType::Monthly,
-        "lifetime" | "perpetual" => LicenseType::Lifetime,
-        "trial" => LicenseType::Trial,
-        _ => LicenseType::Unknown,
-    }
-}
 
-/// Canonical keys when reading license end times from AuthForge maps.
-///
-/// Per [AuthForge variables](https://docs.authforge.cc), prefer **`expiresAt`** on the
-/// license (ISO 8601). Session payload `expiresIn` is a **rolling session token** TTL
-/// updated on each heartbeat in SERVER mode—not when the licensed term ends.
-///
-/// Values: Unix seconds, milliseconds, decimal numbers, digit strings, or RFC 3339 /
-/// ISO‑8601 datetime strings.
-fn subscription_period_end_from_vars(
-    vars: Option<&HashMap<String, Value>>,
-) -> Option<u64> {
-    let map = vars?;
-
-    #[rustfmt::skip]
-    let keys: &[&str] = &[
-        "expiresAt", "expires_at",
-        "subscription_expires_at", "subscriptionExpiresAt",
-        "subscription_period_end", "subscriptionPeriodEnd",
-        "period_end", "periodEnd",
-        "stripe_current_period_end", "stripeCurrentPeriodEnd",
-        "current_period_end", "currentPeriodEnd",
-        "trial_ends_at", "trialEndsAt",
-        "trial_end", "trialEnd",
-        "billing_period_end", "billingPeriodEnd",
-    ];
-
-    for &k in keys {
-        if let Some(v) = map.get(k) {
-            if let Some(ts) = json_value_to_epoch_unix(v) {
-                return Some(ts);
-            }
+    if let Some(path_str) = path
+        .as_deref()
+        .filter(|p| p.is_file())
+        .and_then(|p| p.to_str())
+    {
+        if shared.auth.login_from_file(path_str).is_ok() {
+            return StartupLicense::Licensed;
         }
     }
 
-    None
-}
-
-fn json_value_to_epoch_unix(v: &Value) -> Option<u64> {
-    match v {
-        Value::Number(n) => {
-            if let Some(u) = n.as_u64() {
-                return Some(normalize_epoch_units(u));
-            }
-            let f = n.as_f64()?;
-            (f.is_finite() && f >= 0.0).then(|| normalize_epoch_units(f as u64))
+    let Some(key) = saved_license_key(app) else {
+        if saved_license_key_raw(app).is_some() {
+            let _ = clear_persisted_license_key(app);
         }
-        Value::String(s) => string_to_epoch_unix(s),
-        _ => None,
+        return StartupLicense::Unlicensed;
+    };
+    if saved_license_key_raw(app).as_deref() != Some(key.as_str()) {
+        if let Err(e) = save_license_key(app, &key) {
+            eprintln!("[license] could not persist normalized license key: {e}");
+        }
+    }
+
+    let Some(path) = path else {
+        return StartupLicense::Failed(LicenseFailure::storage(
+            "Couldn't save the license on this PC.".into(),
+        ));
+    };
+
+    match shared.auth.activate_offline(&key, Some(&path)) {
+        Ok(()) => StartupLicense::Licensed,
+        Err(err) => {
+            log_activation_error("activation with the saved key", &err);
+            if is_dead_key(&err) {
+                let _ = clear_persisted_license_key(app);
+            }
+            StartupLicense::Failed(err.into())
+        }
     }
 }
 
-fn string_to_epoch_unix(raw: &str) -> Option<u64> {
-    let t = raw.trim();
-    if t.is_empty() {
-        return None;
-    }
-    if let Ok(u) = t.parse::<u64>() {
-        return Some(normalize_epoch_units(u));
-    }
-
-    use time::format_description::well_known::Rfc3339;
-    use time::OffsetDateTime;
-
-    if let Ok(dt) = OffsetDateTime::parse(t, &Rfc3339) {
-        return Some(dt.unix_timestamp().max(0) as u64);
-    }
-
-    // Minimal offset forms used by some gateways (e.g. `...T00:00:00+00:00`)
-    const ISO8601_Z: &[time::format_description::FormatItem<'_>] = time::macros::format_description!(
-        "[year]-[month]-[day]T[hour]:[minute]:[second]Z"
-    );
-    if let Ok(dt) = time::PrimitiveDateTime::parse(t, &ISO8601_Z)
-        .map(|p| p.assume_utc())
-    {
-        return Some(dt.unix_timestamp().max(0) as u64);
-    }
-
-    None
-}
-
-/// Interpret values above ~year 2286 in seconds as milliseconds.
-#[inline]
-fn normalize_epoch_units(raw: u64) -> u64 {
-    const SECOND_CEILING_MS: u64 = 10_000_000_000;
-    if raw > SECOND_CEILING_MS {
-        raw / 1000
-    } else {
-        raw
-    }
-}
-
-/// Top-level **`licenseExpiresAt`** on signed validate/heartbeat JSON (camelCase or snake_case).
-/// JSON **`null`** means lifetime (returns `None` here). Missing key ⇒ `None`.
-fn license_expires_at_from_signed_session(client: &AuthForgeClient) -> Option<u64> {
-    let session = client.get_session_data()?;
-    let v = session
-        .get("licenseExpiresAt")
-        .or_else(|| session.get("license_expires_at"))?;
-    if v.is_null() {
-        return None;
-    }
-    json_value_to_epoch_unix(v)
-}
-
-fn persist_subscription_ceiling_merge(app: &AppHandle, candidates: &[u64]) -> Result<(), String> {
-    if candidates.is_empty() {
-        return Ok(());
-    }
-    let mut best = *candidates.iter().max().expect("non-empty slice");
-    let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
-    if let Some(prev) = store
-        .get(LICENSE_SUBSCRIPTION_CEILING_UNIX_KEY)
-        .and_then(|v| v.as_u64())
-    {
-        best = best.max(prev);
-    }
-    store.set(
-        LICENSE_SUBSCRIPTION_CEILING_UNIX_KEY,
-        serde_json::Value::Number(best.into()),
-    );
-    store.save().map_err(|e| e.to_string())
-}
-
-/// Persist the farthest license end instant we know for expiry UI (`max(previous, candidates…)`).
-///
-/// Uses **`licenseExpiresAt`** on the signed payload (decoded session JSON — same JSON the SDK stores
-/// in [`AuthForgeClient::get_session_data`]), plus hints from `license_variables` / `app_variables`
-/// on the [`LoginResult`]. **`expiresIn` session TTL is deliberately excluded**: it rolls with SERVER
-/// heartbeats and is not the license term end.
-pub fn ingest_subscription_horizon_after_login_success(
-    app: &AppHandle,
-    login: &LoginResult,
-    client: &AuthForgeClient,
-) -> Result<(), String> {
-    let mut candidates: Vec<u64> = Vec::new();
-    if let Some(v) = subscription_period_end_from_vars(login.license_variables.as_ref()) {
-        candidates.push(v);
-    }
-    if let Some(v) = subscription_period_end_from_vars(login.app_variables.as_ref()) {
-        candidates.push(v);
-    }
-    if let Some(v) = license_expires_at_from_signed_session(client) {
-        candidates.push(v);
-    }
-    if candidates.is_empty() {
-        return Ok(());
-    }
-    persist_subscription_ceiling_merge(app, &candidates)
-}
-
-fn load_subscription_ceiling(app: &AppHandle) -> Option<u64> {
-    let store = app.store(STORE_FILE).ok()?;
-    store
-        .get(LICENSE_SUBSCRIPTION_CEILING_UNIX_KEY)
-        .and_then(|v| v.as_u64())
-}
-
-fn subscription_period_display_unix(
-    app: &AppHandle,
-    license_type: LicenseType,
-    client: &AuthForgeClient,
-) -> Option<u64> {
-    if matches!(license_type, LicenseType::Lifetime) {
-        return None;
-    }
-    let explicit = subscription_period_end_from_vars(client.get_license_variables().as_ref())
-        .or_else(|| subscription_period_end_from_vars(client.get_app_variables().as_ref()));
-    let from_signed = license_expires_at_from_signed_session(client);
-    let ceiling = load_subscription_ceiling(app);
-
-    if let Some(v) = explicit {
-        let _ = persist_subscription_ceiling_merge(app, &[v]);
-    }
-    if let Some(v) = from_signed {
-        let _ = persist_subscription_ceiling_merge(app, &[v]);
-    }
-
-    explicit.or(from_signed).or(ceiling)
+fn current_license_info(shared: &SharedState) -> Option<LicenseInfo> {
+    is_licensed(shared).then(|| LicenseInfo {
+        hwid_masked: mask_hwid(local_hwid()),
+    })
 }
 
 #[tauri::command]
@@ -494,13 +404,9 @@ pub async fn activate_license(
     state: State<'_, AuthState>,
     app: AppHandle,
 ) -> Result<LicenseInfo, LicenseFailure> {
-    let _auth_transition = state.shared().auth_transition_lock.lock();
-    state
-        .shared()
-        .auth_ui_suppressed
-        .store(false, Ordering::SeqCst);
+    let shared = state.shared();
+    let _auth_transition = shared.auth_transition_lock.lock();
 
-    let client = state.client().clone();
     let key = normalize_license_key(&key);
     if key.len() < 8 {
         return Err(LicenseFailure {
@@ -509,83 +415,81 @@ pub async fn activate_license(
         });
     }
 
-    // Clear any prior session/heartbeat so a new key cannot inherit stale
-    // `license_variables` from the previous activation in the same process.
-    client.logout();
+    let path = license_file_path(&app).map_err(|e| {
+        eprintln!("[license] no app data dir: {e}");
+        LicenseFailure::storage("Couldn't save the license on this PC.".into())
+    })?;
 
-    match client.login(&key) {
-        Ok(result) => {
-            let store = app.store(STORE_FILE).map_err(|e| LicenseFailure {
-                code: LicenseError::Storage,
-                message: format!("Could not persist license: {e}"),
-            })?;
-            store.set(LICENSE_KEY_STORE_KEY, serde_json::Value::String(key));
-            store.save().map_err(|e| LicenseFailure {
-                code: LicenseError::Storage,
-                message: format!("Could not save store: {e}"),
-            })?;
-
-            app.emit(
-                "auth-status-changed",
-                AuthStatusPayload {
-                    authenticated: true,
-                    reason: String::new(),
-                },
-            )
-            .ok();
-
-            ingest_subscription_horizon_after_login_success(&app, &result, state.client()).map_err(
-                |e| LicenseFailure {
-                    code: LicenseError::Storage,
-                    message: format!("Could not save license expiry: {e}"),
-                },
-            )?;
-
-            let license_type = classify(result.license_variables.as_ref());
-            let subscription_period_end_unix = subscription_period_display_unix(
-                &app,
-                license_type,
-                state.client(),
-            );
-            Ok(LicenseInfo {
-                license_type,
-                subscription_period_end_unix,
-                hwid_masked: mask_hwid(local_hwid()),
-            })
-        }
-        Err(err) => Err(err.into()),
+    // On error nothing is written and the session is untouched; the user
+    // can fix the problem and press Activate again.
+    if let Err(err) = shared.auth.activate_offline(&key, Some(&path)) {
+        log_activation_error("activation", &err);
+        return Err(err.into());
     }
+
+    // The file is already written, so the license works regardless; the
+    // saved key only makes a later re-activation silent.
+    if let Err(e) = save_license_key(&app, &key) {
+        eprintln!("[license] could not persist license key: {e}");
+    }
+    *shared.license_error.lock() = None;
+
+    app.emit(
+        "auth-status-changed",
+        AuthStatusPayload {
+            authenticated: true,
+            reason: String::new(),
+            error: None,
+        },
+    )
+    .ok();
+
+    current_license_info(shared).ok_or_else(|| LicenseFailure {
+        code: LicenseError::Other,
+        message: "Activation succeeded, but the license could not be read. Restart Tapt.".into(),
+    })
 }
 
+/// "Remove license from this PC": delete the license file and the saved key
+/// and log out. This does NOT free an activation slot; re-activating this
+/// same PC later is free.
 #[tauri::command]
 pub async fn deactivate_license(
     state: State<'_, AuthState>,
     app: AppHandle,
 ) -> Result<(), String> {
-    let _auth_transition = state.shared().auth_transition_lock.lock();
+    let shared = state.shared();
+    let _auth_transition = shared.auth_transition_lock.lock();
 
-    clear_persisted_license_key(&app)?;
+    let path = license_file_path(&app).map_err(|e| {
+        eprintln!("[license] no app data dir: {e}");
+        "Couldn't remove the license from this PC. Try again.".to_string()
+    })?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            eprintln!("[license] could not delete license file: {e}");
+            return Err("Couldn't remove the license from this PC. Try again.".into());
+        }
+    }
+    clear_persisted_license_key(&app).map_err(|e| {
+        eprintln!("[license] could not clear saved key: {e}");
+        "Couldn't remove the license from this PC. Try again.".to_string()
+    })?;
+    *shared.license_error.lock() = None;
 
-    state
-        .shared()
-        .auth_ui_suppressed
-        .store(true, Ordering::SeqCst);
+    shared.auth.logout();
 
     app.emit(
         "auth-status-changed",
         AuthStatusPayload {
             authenticated: false,
             reason: "deactivated".into(),
+            error: None,
         },
     )
     .ok();
-
-    state.client().logout();
-
-    state
-        .shared()
-        .auth_ui_suppressed
-        .store(false, Ordering::SeqCst);
 
     Ok(())
 }
@@ -600,36 +504,19 @@ pub fn get_auth_status(state: State<'_, AuthState>) -> AuthStatusPayload {
         return AuthStatusPayload {
             authenticated: false,
             reason: "checking".into(),
+            error: None,
         };
     }
     AuthStatusPayload {
-        authenticated: overlay_license_gate(shared.as_ref()),
+        authenticated: is_licensed(shared.as_ref()),
         reason: String::new(),
+        error: shared.license_error.lock().clone(),
     }
 }
 
 #[tauri::command]
-pub fn get_license_info(app: AppHandle, state: State<'_, AuthState>) -> Option<LicenseInfo> {
-    let shared = state.shared();
-    if shared.auth_ui_suppressed.load(Ordering::SeqCst) {
-        return None;
-    }
-    let client = state.client();
-    if !client.is_authenticated() {
-        return None;
-    }
-
-    let license_vars = client.get_license_variables();
-    let license_type = classify(license_vars.as_ref());
-
-    let subscription_period_end_unix =
-        subscription_period_display_unix(&app, license_type, client);
-
-    Some(LicenseInfo {
-        license_type,
-        subscription_period_end_unix,
-        hwid_masked: mask_hwid(local_hwid()),
-    })
+pub fn get_license_info(state: State<'_, AuthState>) -> Option<LicenseInfo> {
+    current_license_info(state.shared())
 }
 
 #[tauri::command]
@@ -637,38 +524,22 @@ pub fn get_hwid_masked(_state: State<'_, AuthState>) -> String {
     mask_hwid(local_hwid())
 }
 
+/// Independent of licensing and the trial (see `version.rs`).
 #[tauri::command]
-pub fn get_update_status(state: State<'_, AuthState>) -> UpdateStatus {
-    let shared = state.shared();
-    let client = if shared
-        .startup_auth_pending
-        .load(std::sync::atomic::Ordering::SeqCst)
-        || shared.auth_ui_suppressed.load(Ordering::Relaxed)
-    {
-        None
-    } else if is_session_valid(state.client()) {
-        Some(state.client().as_ref())
-    } else {
-        None
-    };
-    crate::version::update_status_for_client(client)
+pub fn get_update_status() -> UpdateStatus {
+    crate::version::current_status()
 }
 
 #[tauri::command]
 pub fn get_purchase_urls() -> PurchaseUrls {
     PurchaseUrls {
-        monthly: purchase_monthly_url(),
         lifetime: purchase_lifetime_url(),
-        authforge_app_id: authforge_app_id(),
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PurchaseUrls {
-    pub monthly: String,
     pub lifetime: String,
-    /// Public AuthForge application id (safe to show in support UI).
-    pub authforge_app_id: String,
 }
 
 // ============================================================================
@@ -711,11 +582,40 @@ pub fn set_config(
     Ok(())
 }
 
-/// Compute a stable per-(host, user, OS) HWID. Hashed with SHA-256 so
-/// it never leaks identifying material directly. We pass this to the
-/// SDK via `hwid_override` and display its first 8 chars (masked) in
-/// the License tab.
+/// `SHA-256("tapt|" + MachineGuid)`. Set once by Windows setup, the same
+/// for every user on the PC, and not spoofable through env vars. Falls
+/// back to the old env-var scheme only if the registry can't be read.
+/// We pass this to the SDK via `hwid_override` and display its last 4
+/// chars (masked) in the License tab.
 fn compute_hwid() -> String {
+    match machine_guid() {
+        Some(guid) => sha256_hex(&format!("tapt|{guid}")),
+        None => {
+            eprintln!("[hwid] could not read MachineGuid; using the legacy env-var HWID");
+            legacy_env_hwid()
+        }
+    }
+}
+
+#[cfg(windows)]
+fn machine_guid() -> Option<String> {
+    use crate::win_registry::{read_string, Hive};
+    let guid = read_string(
+        Hive::LocalMachine,
+        r"SOFTWARE\Microsoft\Cryptography",
+        "MachineGuid",
+    )?;
+    let guid = guid.trim().to_ascii_lowercase();
+    (!guid.is_empty()).then_some(guid)
+}
+
+#[cfg(not(windows))]
+fn machine_guid() -> Option<String> {
+    None
+}
+
+/// Pre-offline-activation HWID: `SHA-256(host|user|os)` from env vars.
+fn legacy_env_hwid() -> String {
     let host = std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "unknown-host".into());
@@ -723,16 +623,91 @@ fn compute_hwid() -> String {
         .or_else(|_| std::env::var("USER"))
         .unwrap_or_else(|_| "unknown-user".into());
     let os = std::env::consts::OS;
+    sha256_hex(&format!("{host}|{user}|{os}"))
+}
 
-    let material = format!("{host}|{user}|{os}");
-    let mut hasher = Sha256::new();
-    hasher.update(material.as_bytes());
-    let digest = hasher.finalize();
-
+fn sha256_hex(material: &str) -> String {
+    let digest = Sha256::digest(material.as_bytes());
     let mut s = String::with_capacity(digest.len() * 2);
     for b in digest.iter() {
         use std::fmt::Write;
         let _ = write!(&mut s, "{b:02x}");
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message(err: AuthForgeError) -> String {
+        error_to_message(&err)
+    }
+
+    #[test]
+    fn offline_activation_codes_map_to_messages() {
+        assert_eq!(
+            message(AuthForgeError::InvalidKey),
+            "License key not found. Check for typos."
+        );
+        assert_eq!(message(AuthForgeError::Revoked), "This license is no longer valid.");
+        assert!(message(AuthForgeError::Other("offline_activation_limit_reached".into()))
+            .contains("maximum number of PCs"));
+        assert_eq!(
+            message(AuthForgeError::HwidMismatch),
+            "No free activation slot for this PC. Email hello@razkom.com for help."
+        );
+        assert!(message(AuthForgeError::Other("offline_activation_requires_seats".into()))
+            .starts_with("Activation isn't available"));
+        assert_eq!(message(AuthForgeError::NoCredits), MSG_UNREACHABLE);
+        assert_eq!(message(AuthForgeError::NetworkError("timeout: x".into())), MSG_UNREACHABLE);
+        assert_eq!(
+            message(AuthForgeError::Other("offline_file_rejected: wrong_app".into())),
+            "Activation failed. Email hello@razkom.com for help."
+        );
+        assert_eq!(
+            message(AuthForgeError::Other("file_write_failed: access denied".into())),
+            "Couldn't save the license file: access denied"
+        );
+    }
+
+    /// Every "get help" message names the support address.
+    #[test]
+    fn help_messages_name_support_email() {
+        for code in [
+            "offline_activation_limit_reached",
+            "hwid_mismatch",
+            "offline_activation_disabled",
+            "offline_activation_requires_seats",
+            "offline_activation_requires_perpetual",
+            "offline_file_rejected",
+            "blocked",
+            "app_disabled",
+            "some_unknown_code",
+        ] {
+            let msg = message(AuthForgeError::Other(code.into()));
+            assert!(msg.contains(SUPPORT_EMAIL), "{code}: {msg}");
+            assert!(!msg.to_lowercase().contains("contact support"), "{code}: {msg}");
+        }
+    }
+
+    #[test]
+    fn license_error_codes_from_other() {
+        assert!(matches!(
+            LicenseError::from(&AuthForgeError::Other("offline_activation_limit_reached".into())),
+            LicenseError::OfflineActivationLimitReached
+        ));
+        assert!(matches!(
+            LicenseError::from(&AuthForgeError::Other("http_error_502".into())),
+            LicenseError::Network
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn hwid_uses_machine_guid() {
+        let guid = machine_guid().expect("MachineGuid readable on Windows");
+        assert_eq!(compute_hwid(), sha256_hex(&format!("tapt|{guid}")));
+        assert_eq!(compute_hwid().len(), 64);
+    }
 }

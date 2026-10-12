@@ -13,11 +13,11 @@ export default function AppVersionLine({ status }: AppVersionLineProps) {
   return (
     <p className="kv-about-version">
       <span className="kv-about-version__label">Version</span>{" "}
-      <span className="kv-about-version__value">v{version}</span>
+      <span className="kv-about-version__value">{version}</span>
       {status?.update_available && status.latest_version ? (
         <span className="kv-about-version__hint">
-          {" "}
-          — v{status.latest_version} available —{" "}
+          {" · "}
+          Version {status.latest_version} is available.{" "}
           <button
             type="button"
             className="kv-license-footnote__link"
@@ -28,8 +28,7 @@ export default function AppVersionLine({ status }: AppVersionLineProps) {
         </span>
       ) : (
         <span className="kv-about-version__hint">
-          {" "}
-          —{" "}
+          {" · "}
           <button
             type="button"
             className="kv-license-footnote__link"

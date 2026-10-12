@@ -17,14 +17,14 @@ export default function NudgeCrossRow({
   const [dvU = false, dvD = false] = verticalDisabled ?? [];
 
   return (
-    <div className="kv-nudge-cross-wrap" aria-label="Nudge by one pixel">
+    <div className="kv-nudge-cross-wrap" aria-label="Move one pixel">
       <div className="kv-nudge-cross">
         <div />
         <button
           type="button"
           className="kv-nudge-btn kv-nudge-btn--arrow"
           disabled={dvU}
-          aria-label="Nudge one pixel upward on screen"
+          aria-label="Move up one pixel"
           onClick={() => onVertical("up")}
         >
           ↑
@@ -34,7 +34,7 @@ export default function NudgeCrossRow({
           type="button"
           className="kv-nudge-btn kv-nudge-btn--arrow"
           disabled={dhL}
-          aria-label="Nudge one pixel left on screen"
+          aria-label="Move left one pixel"
           onClick={() => onHorizontal("left")}
         >
           ←
@@ -44,7 +44,7 @@ export default function NudgeCrossRow({
           type="button"
           className="kv-nudge-btn kv-nudge-btn--arrow"
           disabled={dhR}
-          aria-label="Nudge one pixel right on screen"
+          aria-label="Move right one pixel"
           onClick={() => onHorizontal("right")}
         >
           →
@@ -54,7 +54,7 @@ export default function NudgeCrossRow({
           type="button"
           className="kv-nudge-btn kv-nudge-btn--arrow"
           disabled={dvD}
-          aria-label="Nudge one pixel downward on screen"
+          aria-label="Move down one pixel"
           onClick={() => onVertical("down")}
         >
           ↓
