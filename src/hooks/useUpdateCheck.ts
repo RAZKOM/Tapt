@@ -8,7 +8,7 @@ const RESYNC_INTERVAL_MS = 15 * 60_000;
 
 /**
  * Compare installed version (`CARGO_PKG_VERSION`) with the latest version
- * Rust fetched from the latest `RAZKOM/Tapt.` GitHub release. Independent of the
+ * Rust fetched from the latest `RAZKOM/Tapt` GitHub release. Independent of the
  * license and the trial.
  */
 export function useUpdateCheck() {

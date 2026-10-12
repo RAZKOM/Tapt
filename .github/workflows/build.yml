@@ -8,13 +8,60 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Read-only by default; only the release job can write (to publish releases).
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
-    name: Build (windows-latest)
+  # Runs everywhere, including pull requests from forks, which get no secrets.
+  # Debug builds compile without the AuthForge credentials.
+  check:
+    name: Check (frontend, clippy, tests)
     runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets
+
+      - name: Tests
+        working-directory: src-tauri
+        run: cargo test
+
+  # Official build with the AuthForge credentials. Never runs for pull
+  # requests, so fork code never sees the secrets. On `v*` tags it also
+  # publishes the release that razkom.com/tapt and the in-app update check use.
+  release:
+    name: Release build
+    needs: check
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: windows-latest
+    permissions:
+      contents: write
 
     env:
       AUTHFORGE_APP_ID: ${{ secrets.AUTHFORGE_APP_ID }}
@@ -76,76 +123,40 @@ jobs:
           STRIPE_LIFETIME_URL=${STRIPE_LIFETIME_URL}
           EOF
 
-      # Build only here — release uploads are handled in the next step so installers
-      # reliably appear under the GitHub Release (upload-artifact is Actions-only, not Releases).
+      # Build only; publishing happens after the leak check below.
       - name: Build with Tauri
         uses: tauri-apps/tauri-action@v0
         with:
           includeRelease: true
 
-      - name: Attach NSIS installer to GitHub Release
+      - name: Verify no plaintext secret leakage
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN=$(find src-tauri/target -name 'tapt.exe' -type f | head -n1)
+          if [ -z "$BIN" ]; then
+            echo "::error::tapt.exe not found after the build"
+            exit 1
+          fi
+          for name in AUTHFORGE_APP_ID AUTHFORGE_APP_SECRET; do
+            value="${!name}"
+            if [ -n "$value" ] && grep -aqF "$value" "$BIN"; then
+              echo "::error::$name found as plaintext in $BIN"
+              exit 1
+            fi
+          done
+          echo "binary clean of known plaintext secrets"
+
+      # The published release is what installed copies see as "Update
+      # available" (version.rs reads this repo's latest release) and what the
+      # razkom.com/tapt Download button serves (TaptSetup.exe).
+      - name: Publish release
         if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          installers=(src-tauri/target/release/bundle/nsis/*-setup.exe)
-          if [ "${#installers[@]}" -eq 0 ]; then
-            echo "::error::No NSIS *-setup.exe under src-tauri/target/release/bundle/nsis/"
-            find src-tauri/target/release/bundle -type f 2>/dev/null || true
-            exit 1
-          fi
-          if ! gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
-            gh release create "${{ github.ref_name }}" \
-              --draft \
-              --title "${{ github.ref_name }}" \
-              --notes "Tapt ${{ github.ref_name }}"
-          fi
-          gh release upload "${{ github.ref_name }}" "${installers[@]}" --clobber
-
-      - name: Verify no plaintext secret leakage
-        shell: bash
-        run: |
-          set -e
-          BIN=$(find src-tauri/target -name 'tapt.exe' -type f | head -n1)
-          if [ -z "$BIN" ]; then
-            echo "binary not found; skipping leakage check"
-            exit 0
-          fi
-          if [ -n "${AUTHFORGE_APP_ID}" ]; then
-            if grep -aF "${AUTHFORGE_APP_ID}" "$BIN" > /dev/null 2>&1; then
-              echo "::error::AUTHFORGE_APP_ID found as plaintext in $BIN"
-              exit 1
-            fi
-          fi
-          if [ -n "${AUTHFORGE_APP_SECRET}" ]; then
-            if grep -aF "${AUTHFORGE_APP_SECRET}" "$BIN" > /dev/null 2>&1; then
-              echo "::error::AUTHFORGE_APP_SECRET found as plaintext in $BIN"
-              exit 1
-            fi
-          fi
-          echo "binary clean of known plaintext secrets"
-
-      # Runs after the leak check so a leaky build never goes public.
-      # Publishing here is what installed copies see as "Update available"
-      # (version.rs reads the latest release of this repo) and what the
-      # razkom.com/tapt Download button serves (TaptSetup.exe).
-      # Needs TAPT_RELEASES_TOKEN: a fine-grained token with Contents
-      # read/write on RAZKOM/Tapt. only (GITHUB_TOKEN can't write there).
-      - name: Publish installer to public releases repo
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-        env:
-          GH_TOKEN: ${{ secrets.TAPT_RELEASES_TOKEN }}
-          PUBLIC_REPO: RAZKOM/Tapt.
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::error::TAPT_RELEASES_TOKEN secret is not set"
-            exit 1
-          fi
           shopt -s nullglob
           installers=(src-tauri/target/release/bundle/nsis/*-setup.exe)
           if [ "${#installers[@]}" -ne 1 ]; then
@@ -169,13 +180,15 @@ jobs:
             echo "Free 1-hour trial built in. Buy a lifetime key at **[razkom.com/tapt](https://razkom.com/tapt)**."
           } > release-notes.md
 
-          if gh release view "$GITHUB_REF_NAME" --repo "$PUBLIC_REPO" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" TaptSetup.exe --repo "$PUBLIC_REPO" --clobber
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            # Re-run, or a leftover draft: replace the installer and publish it.
+            gh release upload "$GITHUB_REF_NAME" TaptSetup.exe --clobber
+            gh release edit "$GITHUB_REF_NAME" --draft=false --latest --notes-file release-notes.md
           else
             gh release create "$GITHUB_REF_NAME" TaptSetup.exe \
-              --repo "$PUBLIC_REPO" \
-              --title "Tapt. $GITHUB_REF_NAME" \
+              --title "Tapt $GITHUB_REF_NAME" \
               --notes-file release-notes.md \
+              --verify-tag \
               --latest
           fi
 

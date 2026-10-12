@@ -1,9 +1,11 @@
 [package]
 name = "tapt"
-version = "1.1.0"
-description = "Tapt. — transparent keyboard overlay for streams and demos"
-authors = ["Tapt"]
-license = "Proprietary"
+version = "1.1.1"
+description = "Tapt: a live keyboard overlay for streams, tutorials and demos"
+authors = ["RAZKOM <hello@razkom.com>"]
+license = "GPL-3.0-only"
+repository = "https://github.com/RAZKOM/Tapt"
+homepage = "https://razkom.com/tapt/"
 edition = "2021"
 rust-version = "1.77"
 

@@ -1,9 +1,9 @@
 //! Installed app version (`CARGO_PKG_VERSION`) and the update check.
 //!
-//! The latest version is the `tag_name` of the latest published release in
-//! the public releases repo ([`UPDATE_MANIFEST_URL`], `RAZKOM/Tapt.`).
-//! Publishing a release there (not a draft or pre-release) is all it takes
-//! for installed copies to offer the update.
+//! The latest version is the `tag_name` of the latest published release of
+//! this repo ([`UPDATE_MANIFEST_URL`], `RAZKOM/Tapt`). CI publishes one for
+//! every `v*` tag; that (not a draft or pre-release) is all it takes for
+//! installed copies to offer the update.
 //!
 //! The fetch is unauthenticated and failure-silent, and runs on its own
 //! thread. It has nothing to do with licensing or the trial: offline
@@ -27,7 +27,7 @@ pub const RELEASES_URL: &str = "https://razkom.com/tapt/";
 /// Latest release of the public releases repo (GitHub REST API). Drafts
 /// and pre-releases are excluded by GitHub. Unauthenticated calls allow 60
 /// requests per hour per IP; we make one every [`CHECK_INTERVAL`].
-pub const UPDATE_MANIFEST_URL: &str = "https://api.github.com/repos/RAZKOM/Tapt./releases/latest";
+pub const UPDATE_MANIFEST_URL: &str = "https://api.github.com/repos/RAZKOM/Tapt/releases/latest";
 
 const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);

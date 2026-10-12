@@ -61,7 +61,7 @@ export interface PurchaseUrls {
   lifetime: string;
 }
 
-/** Mirrors `src-tauri/src/version.rs` — installed vs the latest `RAZKOM/Tapt.` GitHub release. */
+/** Mirrors `src-tauri/src/version.rs`: installed version vs the latest `RAZKOM/Tapt` GitHub release. */
 export interface UpdateStatus {
   current_version: string;
   latest_version: string | null;
