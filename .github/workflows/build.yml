@@ -44,6 +44,27 @@ jobs:
       - name: Install npm deps
         run: npm ci
 
+      # A tag that doesn't match the app version would ship a build that
+      # reports the wrong version, and installed copies would keep offering
+      # an "update" to themselves.
+      - name: Check tag matches app version
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in src-tauri/tauri.conf.json package.json; do
+            v=$(node -p "require('./$f').version")
+            if [ "v$v" != "$GITHUB_REF_NAME" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match version $v in $f"
+              exit 1
+            fi
+          done
+          cargo_v=$(grep -m1 '^version' src-tauri/Cargo.toml | cut -d'"' -f2)
+          if [ "v$cargo_v" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match version $cargo_v in src-tauri/Cargo.toml"
+            exit 1
+          fi
+
       - name: Write .env from CI secrets
         shell: bash
         run: |
@@ -106,6 +127,57 @@ jobs:
             fi
           fi
           echo "binary clean of known plaintext secrets"
+
+      # Runs after the leak check so a leaky build never goes public.
+      # Publishing here is what installed copies see as "Update available"
+      # (version.rs reads the latest release of this repo) and what the
+      # razkom.com/tapt Download button serves (TaptSetup.exe).
+      # Needs TAPT_RELEASES_TOKEN: a fine-grained token with Contents
+      # read/write on RAZKOM/Tapt. only (GITHUB_TOKEN can't write there).
+      - name: Publish installer to public releases repo
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          GH_TOKEN: ${{ secrets.TAPT_RELEASES_TOKEN }}
+          PUBLIC_REPO: RAZKOM/Tapt.
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::TAPT_RELEASES_TOKEN secret is not set"
+            exit 1
+          fi
+          shopt -s nullglob
+          installers=(src-tauri/target/release/bundle/nsis/*-setup.exe)
+          if [ "${#installers[@]}" -ne 1 ]; then
+            echo "::error::Expected one NSIS installer, found ${#installers[@]}"
+            exit 1
+          fi
+          cp "${installers[0]}" TaptSetup.exe
+
+          # Release notes: the annotated tag's message (git tag -a), else the
+          # tagged commit's message, plus the usual footer. actions/checkout
+          # can turn annotated tags into lightweight ones, so refetch it.
+          git fetch --force --no-tags origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          notes=""
+          if [ "$(git cat-file -t "$GITHUB_REF_NAME")" = "tag" ]; then
+            notes=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")
+          fi
+          [ -n "$notes" ] || notes=$(git log -1 --format=%B)
+          {
+            echo "$notes"
+            echo
+            echo "Free 1-hour trial built in. Buy a lifetime key at **[razkom.com/tapt](https://razkom.com/tapt)**."
+          } > release-notes.md
+
+          if gh release view "$GITHUB_REF_NAME" --repo "$PUBLIC_REPO" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" TaptSetup.exe --repo "$PUBLIC_REPO" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" TaptSetup.exe \
+              --repo "$PUBLIC_REPO" \
+              --title "Tapt. $GITHUB_REF_NAME" \
+              --notes-file release-notes.md \
+              --latest
+          fi
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
